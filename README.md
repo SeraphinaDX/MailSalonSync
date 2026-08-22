@@ -179,6 +179,10 @@ For JMAP, a message may belong to several mailboxes at once. Local deletion from
 
 The server derives the SMTP envelope from the Sender/From and To/Cc/Bcc headers, as defined by JMAP Mail.
 
+## GNU Emacs
+
+Do you run [mu4e on GNU Emacs](https://git.cerberusgames.ca/Starstreak/MailSalonSync/src/branch/main/Using%20MailSalonSync%20with%20mu4e.md)?
+
 ## Current scope
 
 This first version intentionally focuses on reliable message mirroring and deletion. It initializes Maildir seen state from IMAP `\\Seen` / JMAP `$seen`, but it does **not yet perform bidirectional flag/keyword synchronization**. It also does not upload arbitrary new Maildir files back into IMAP/JMAP; outbound JMAP mail is handled explicitly by `jmap-send`.
