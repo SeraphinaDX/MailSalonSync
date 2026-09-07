@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -9,65 +8,65 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/BurntSushi/toml"
 )
 
 type Config struct {
-	StateDir string    `json:"state_dir"`
-	Accounts []Account `json:"accounts"`
+	StateDir string    `toml:"state_dir"`
+	Accounts []Account `toml:"accounts"`
 }
 
 type Account struct {
-	Name             string    `json:"name"`
-	Protocol         string    `json:"protocol"`
-	LocalRoot        string    `json:"local_root"`
-	PropagateDeletes bool      `json:"propagate_deletes"`
-	Mailboxes        []Mailbox `json:"mailboxes"`
-	IMAP             *IMAP     `json:"imap,omitempty"`
-	JMAP             *JMAP     `json:"jmap,omitempty"`
+	Name             string    `toml:"name"`
+	Protocol         string    `toml:"protocol"`
+	LocalRoot        string    `toml:"local_root"`
+	PropagateDeletes bool      `toml:"propagate_deletes"`
+	Mailboxes        []Mailbox `toml:"mailboxes"`
+	IMAP             *IMAP     `toml:"imap,omitempty"`
+	JMAP             *JMAP     `toml:"jmap,omitempty"`
 }
 
 type Mailbox struct {
-	Remote string `json:"remote"`
-	Local  string `json:"local"`
+	Remote string `toml:"remote"`
+	Local  string `toml:"local"`
 }
 
 type IMAP struct {
-	Address                    string `json:"address"`
-	Username                   string `json:"username"`
-	Password                   string `json:"password,omitempty"`
-	PasswordEnv                string `json:"password_env,omitempty"`
-	PasswordCommand            string `json:"password_command,omitempty"`
-	Security                   string `json:"security,omitempty"`
-	AllowExpungeWithoutUIDPlus bool   `json:"allow_expunge_without_uidplus,omitempty"`
+	Address                    string `toml:"address"`
+	Username                   string `toml:"username"`
+	Password                   string `toml:"password,omitempty"`
+	PasswordEnv                string `toml:"password_env,omitempty"`
+	PasswordCommand            string `toml:"password_command,omitempty"`
+	Security                   string `toml:"security,omitempty"`
+	AllowExpungeWithoutUIDPlus bool   `toml:"allow_expunge_without_uidplus,omitempty"`
 }
 
 type JMAP struct {
-	SessionURL         string `json:"session_url"`
-	Auth               string `json:"auth,omitempty"`
-	Username           string `json:"username,omitempty"`
-	Password           string `json:"password,omitempty"`
-	PasswordEnv        string `json:"password_env,omitempty"`
-	PasswordCommand    string `json:"password_command,omitempty"`
-	BearerToken        string `json:"bearer_token,omitempty"`
-	BearerTokenEnv     string `json:"bearer_token_env,omitempty"`
-	BearerTokenCommand string `json:"bearer_token_command,omitempty"`
-	AccountID          string `json:"account_id,omitempty"`
-	IdentityID         string `json:"identity_id,omitempty"`
-	DraftsMailbox      string `json:"drafts_mailbox,omitempty"`
-	SentMailbox        string `json:"sent_mailbox,omitempty"`
+	SessionURL         string `toml:"session_url"`
+	Auth               string `toml:"auth,omitempty"`
+	Username           string `toml:"username,omitempty"`
+	Password           string `toml:"password,omitempty"`
+	PasswordEnv        string `toml:"password_env,omitempty"`
+	PasswordCommand    string `toml:"password_command,omitempty"`
+	BearerToken        string `toml:"bearer_token,omitempty"`
+	BearerTokenEnv     string `toml:"bearer_token_env,omitempty"`
+	BearerTokenCommand string `toml:"bearer_token_command,omitempty"`
+	AccountID          string `toml:"account_id,omitempty"`
+	IdentityID         string `toml:"identity_id,omitempty"`
+	DraftsMailbox      string `toml:"drafts_mailbox,omitempty"`
+	SentMailbox        string `toml:"sent_mailbox,omitempty"`
 }
 
 func Load(path string) (*Config, error) {
 	path = ExpandPath(path)
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
 	var cfg Config
-	dec := json.NewDecoder(strings.NewReader(string(b)))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&cfg); err != nil {
+	md, err := toml.DecodeFile(path, &cfg)
+	if err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	if undecoded := md.Undecoded(); len(undecoded) != 0 {
+		return nil, fmt.Errorf("parse config: unknown fields: %v", undecoded)
 	}
 	if cfg.StateDir == "" {
 		if x := os.Getenv("XDG_STATE_HOME"); x != "" {
