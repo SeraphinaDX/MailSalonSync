@@ -23,12 +23,19 @@ type UploadExistingSummary struct {
 	Skipped  int
 }
 
+type existingRemoteIndex struct {
+	messages  []remoteAdoptMessage
+	locations map[string]map[string]bool
+}
+
 // UploadExisting is a one-shot migration for local Maildir messages that are
 // not present on the server. It currently supports JMAP accounts. Before
-// importing a local message, it compares it against the current remote mailbox
-// using the same conservative exact / Message-ID / header matching used by
-// adopt-existing. A unique remote match is adopted instead of uploaded, making
-// reruns safe after partial/interrupted migrations.
+// importing a local message, it compares it against messages in all configured
+// server mailboxes for the account using the conservative exact / Message-ID /
+// header matching used by adopt-existing. A unique match in the same target
+// mailbox is adopted instead of uploaded, making reruns safe after partial or
+// interrupted migrations. A match in another mailbox is skipped rather than
+// duplicated.
 func UploadExisting(ctx context.Context, cfg *config.Config, accountNames []string, opts UploadExistingOptions, r status.Reporter) (UploadExistingSummary, error) {
 	selected := map[string]bool{}
 	for _, n := range accountNames {
@@ -54,7 +61,11 @@ func UploadExisting(ctx context.Context, cfg *config.Config, accountNames []stri
 			return total, err
 		}
 		if a.Protocol != "jmap" {
-			return total, fmt.Errorf("account %s: upload-existing currently supports JMAP accounts only", a.Name)
+			if len(selected) > 0 && selected[a.Name] {
+				return total, fmt.Errorf("account %s: upload-existing currently supports JMAP accounts only", a.Name)
+			}
+			r.Set(a.Name, "", "skipping upload-existing: JMAP only")
+			continue
 		}
 		summary, err := uploadExistingJMAP(ctx, cfg, a, opts, r)
 		total.Uploaded += summary.Uploaded
@@ -84,15 +95,20 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 	if err != nil {
 		return UploadExistingSummary{}, err
 	}
+	index, resolved, err := buildExistingRemoteIndex(ctx, c, a, boxes, r)
+	if err != nil {
+		return UploadExistingSummary{}, err
+	}
 
 	var out UploadExistingSummary
+	planned := 0
 	for _, mapping := range a.Mailboxes {
 		if err := ctx.Err(); err != nil {
 			return out, err
 		}
-		box, err := jmap.ResolveMailbox(mapping.Remote, boxes)
-		if err != nil {
-			return out, err
+		box, ok := resolved[mapping.Remote]
+		if !ok {
+			return out, fmt.Errorf("no resolved mailbox for %q", mapping.Remote)
 		}
 		r.Set(a.Name, box.FullName, "scanning local-only mail for upload")
 		locals, err := untaggedLocalMessages(localMailboxPath(a, mapping.Local))
@@ -103,33 +119,12 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 			continue
 		}
 
-		ids, err := c.QueryEmailIDs(ctx, box.ID)
-		if err != nil {
-			return out, err
-		}
-		metadata, err := c.GetEmails(ctx, ids)
-		if err != nil {
-			return out, err
-		}
-		remote := make([]remoteAdoptMessage, 0, len(ids))
-		for _, id := range ids {
-			e, ok := metadata[id]
-			if !ok {
-				continue
-			}
-			raw, err := c.DownloadEmail(ctx, e.BlobID)
-			if err != nil {
-				return out, err
-			}
-			remote = append(remote, remoteAdoptMessage{ID: id, Raw: raw})
-		}
-
 		uploaded, adopted, skipped := 0, 0, 0
 		for _, local := range locals {
 			if err := ctx.Err(); err != nil {
 				return out, err
 			}
-			matches, _ := matchRemoteDetailed(local.Raw, remote, map[string]bool{})
+			matches, _ := matchRemoteDetailed(local.Raw, index.messages, map[string]bool{})
 			if len(matches) > 1 {
 				skipped++
 				continue
@@ -137,10 +132,31 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 
 			if len(matches) == 1 {
 				remoteID := matches[0].ID
+				if strings.HasPrefix(remoteID, "planned-upload-") {
+					// Another identical local-only file in this same dry run has
+					// already been selected for upload. Do not count it twice.
+					skipped++
+					continue
+				}
+				if !index.locations[remoteID][box.ID] {
+					// It already exists on the server, but in a different mapped
+					// mailbox. Do not create a duplicate in this target mailbox.
+					skipped++
+					continue
+				}
 				stateKey := state.Key("jmap", mapping.Remote, remoteID)
 				fileKey := maildir.StableKey(a.Name + "\n" + stateKey)
 				if existing, ok := s.Entries[stateKey]; ok && existing.FileKey != "" {
 					fileKey = existing.FileKey
+					dir := maildir.Open(localMailboxPath(a, mapping.Local))
+					if _, exists, err := dir.Find(fileKey); err != nil {
+						return out, err
+					} else if exists {
+						// The server message already has a healthy tracked local
+						// copy. This untagged file is a duplicate, not an adoption.
+						skipped++
+						continue
+					}
 				}
 				if !opts.DryRun {
 					if _, err := maildir.EnsureStableKey(local.Path, fileKey); err != nil {
@@ -163,6 +179,10 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 
 			if opts.DryRun {
 				uploaded++
+				planned++
+				id := fmt.Sprintf("planned-upload-%d", planned)
+				index.messages = append(index.messages, remoteAdoptMessage{ID: id, Raw: local.Raw})
+				index.locations[id] = map[string]bool{box.ID: true}
 				continue
 			}
 
@@ -186,7 +206,8 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 			if err := s.Save(statePath); err != nil {
 				return out, err
 			}
-			remote = append(remote, remoteAdoptMessage{ID: remoteID, Raw: local.Raw})
+			index.messages = append(index.messages, remoteAdoptMessage{ID: remoteID, Raw: local.Raw})
+			index.locations[remoteID] = map[string]bool{box.ID: true}
 			uploaded++
 		}
 
@@ -196,12 +217,56 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 			action = "would upload"
 			adoptAction = "would adopt"
 		}
-		r.Set(a.Name, box.FullName, fmt.Sprintf("upload-existing: %d local untagged; %s %d; %s %d existing remote; skipped %d ambiguous", len(locals), action, uploaded, adoptAction, adopted, skipped))
+		r.Set(a.Name, box.FullName, fmt.Sprintf("upload-existing: %d local untagged; %s %d; %s %d existing remote; skipped %d duplicate/ambiguous/elsewhere", len(locals), action, uploaded, adoptAction, adopted, skipped))
 		out.Uploaded += uploaded
 		out.Adopted += adopted
 		out.Skipped += skipped
 	}
 	return out, nil
+}
+
+func buildExistingRemoteIndex(ctx context.Context, c *jmap.Client, a *config.Account, boxes []jmap.Mailbox, r status.Reporter) (*existingRemoteIndex, map[string]jmap.Mailbox, error) {
+	index := &existingRemoteIndex{
+		locations: map[string]map[string]bool{},
+	}
+	resolved := map[string]jmap.Mailbox{}
+	seenID := map[string]bool{}
+	for _, mapping := range a.Mailboxes {
+		box, err := jmap.ResolveMailbox(mapping.Remote, boxes)
+		if err != nil {
+			return nil, nil, err
+		}
+		resolved[mapping.Remote] = box
+		r.Set(a.Name, box.FullName, "indexing existing server mail for duplicate protection")
+		ids, err := c.QueryEmailIDs(ctx, box.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		metadata, err := c.GetEmails(ctx, ids)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, id := range ids {
+			if index.locations[id] == nil {
+				index.locations[id] = map[string]bool{}
+			}
+			index.locations[id][box.ID] = true
+			if seenID[id] {
+				continue
+			}
+			e, ok := metadata[id]
+			if !ok {
+				continue
+			}
+			raw, err := c.DownloadEmail(ctx, e.BlobID)
+			if err != nil {
+				return nil, nil, err
+			}
+			seenID[id] = true
+			index.messages = append(index.messages, remoteAdoptMessage{ID: id, Raw: raw})
+		}
+	}
+	return index, resolved, nil
 }
 
 func localMaildirSeen(path string) bool {
