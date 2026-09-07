@@ -37,14 +37,16 @@ type localAdoptMessage struct {
 
 type AdoptSummary struct {
 	Adopted int
+	Retired int
 	Skipped int
 }
 
 // AdoptExisting is a one-shot migration for mail that predates MailSalonSync's
 // stable filename markers. It never uploads local messages and never changes
-// remote mailbox membership. Existing state is preserved; untagged local mail
-// is adopted only when it uniquely matches a message already present in the
-// corresponding remote mailbox.
+// remote mailbox membership. Untagged legacy duplicates of healthy tracked
+// copies are moved to state_dir/adopt-backup, while genuinely untracked local
+// mail is adopted only when it uniquely matches a message already on the
+// server.
 func AdoptExisting(ctx context.Context, cfg *config.Config, accountNames []string, opts AdoptOptions, r status.Reporter) (AdoptSummary, error) {
 	selected := map[string]bool{}
 	for _, n := range accountNames {
@@ -79,6 +81,7 @@ func AdoptExisting(ctx context.Context, cfg *config.Config, accountNames []strin
 			summary, err = adoptJMAP(ctx, cfg, a, opts, r)
 		}
 		total.Adopted += summary.Adopted
+		total.Retired += summary.Retired
 		total.Skipped += summary.Skipped
 		if err != nil {
 			return total, fmt.Errorf("account %s: %w", a.Name, err)
@@ -125,6 +128,16 @@ func adoptIMAP(ctx context.Context, cfg *config.Config, a *config.Account, opts 
 		if len(locals) == 0 {
 			continue
 		}
+
+		locals, retired, err := reconcileLegacyDuplicates(cfg, a, mapping, "imap", locals, s, opts.DryRun, r)
+		out.Retired += retired
+		if err != nil {
+			return out, err
+		}
+		if len(locals) == 0 {
+			continue
+		}
+
 		uids, err := c.UIDSearchAll()
 		if err != nil {
 			return out, err
@@ -198,6 +211,16 @@ func adoptJMAP(ctx context.Context, cfg *config.Config, a *config.Account, opts 
 		if len(locals) == 0 {
 			continue
 		}
+
+		locals, retired, err := reconcileLegacyDuplicates(cfg, a, mapping, "jmap", locals, s, opts.DryRun, r)
+		out.Retired += retired
+		if err != nil {
+			return out, err
+		}
+		if len(locals) == 0 {
+			continue
+		}
+
 		ids, err := c.QueryEmailIDs(ctx, box.ID)
 		if err != nil {
 			return out, err
