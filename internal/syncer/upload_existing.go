@@ -32,6 +32,10 @@ type UploadExistingSummary struct {
 type existingRemoteIndex struct {
 	messages  []remoteAdoptMessage
 	locations map[string]map[string]bool
+	// migrated marks messages selected/imported by this upload-existing run.
+	// A later matching local file is therefore a legacy local duplicate and can
+	// be retired safely without confusing it with pre-existing server mail.
+	migrated map[string]bool
 }
 
 // UploadExisting is a one-shot migration for local Maildir messages that are
@@ -41,7 +45,9 @@ type existingRemoteIndex struct {
 // header matching used by adopt-existing. A unique match in the same target
 // mailbox is adopted instead of uploaded, making reruns safe after partial or
 // interrupted migrations. A match in another mailbox is skipped rather than
-// duplicated.
+// duplicated. Additional local copies of a message migrated by this run are
+// moved to state_dir/adopt-backup so only the tracked canonical copy remains in
+// active Maildir folders.
 func UploadExisting(ctx context.Context, cfg *config.Config, accountNames []string, opts UploadExistingOptions, r status.Reporter) (UploadExistingSummary, error) {
 	selected := map[string]bool{}
 	for _, n := range accountNames {
@@ -147,14 +153,23 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 
 			if len(matches) == 1 {
 				remoteID := matches[0].ID
-				if strings.HasPrefix(remoteID, "planned-upload-") {
-					// Another matching local-only file in this same dry run has
-					// already been selected for upload. Do not count it twice.
+
+				// If this remote identity came from a message selected/imported
+				// earlier in this same migration, this local file is another
+				// legacy copy of that canonical message. Retire it from active
+				// Maildir, even if it is sitting in a different mapped folder.
+				if index.migrated[remoteID] {
+					if !opts.DryRun {
+						if err := backupLegacyDuplicate(cfg.StateDir, a.Name, mapping.Local, local.Path); err != nil {
+							return out, fmt.Errorf("retire duplicate %s: %w", filepath.Base(local.Path), err)
+						}
+					}
 					duplicates++
 					countDuplicateMethod(method, &duplicateExact, &duplicateMessageID, &duplicateHeader)
 					skipped++
 					continue
 				}
+
 				if !index.locations[remoteID][box.ID] {
 					// It already exists on the server, but in a different mapped
 					// mailbox. Do not create a duplicate in this target mailbox.
@@ -171,7 +186,12 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 						return out, err
 					} else if exists {
 						// The server message already has a healthy tracked local
-						// copy. This untagged file is a duplicate, not an adoption.
+						// copy. Retire this untagged duplicate from active Maildir.
+						if !opts.DryRun {
+							if err := backupLegacyDuplicate(cfg.StateDir, a.Name, mapping.Local, local.Path); err != nil {
+								return out, fmt.Errorf("retire duplicate %s: %w", filepath.Base(local.Path), err)
+							}
+						}
 						duplicates++
 						countDuplicateMethod(method, &duplicateExact, &duplicateMessageID, &duplicateHeader)
 						skipped++
@@ -203,6 +223,7 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 				id := fmt.Sprintf("planned-upload-%d", planned)
 				index.messages = append(index.messages, remoteAdoptMessage{ID: id, Raw: local.Raw})
 				index.locations[id] = map[string]bool{box.ID: true}
+				index.migrated[id] = true
 				continue
 			}
 
@@ -228,16 +249,19 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 			}
 			index.messages = append(index.messages, remoteAdoptMessage{ID: remoteID, Raw: local.Raw})
 			index.locations[remoteID] = map[string]bool{box.ID: true}
+			index.migrated[remoteID] = true
 			uploaded++
 		}
 
 		action := "uploaded"
 		adoptAction := "adopted"
+		duplicateAction := "retired to adopt-backup"
 		if opts.DryRun {
 			action = "would upload"
 			adoptAction = "would adopt"
+			duplicateAction = "would retire to adopt-backup"
 		}
-		r.Set(a.Name, box.FullName, fmt.Sprintf("upload-existing: %d local untagged; %s %d; %s %d existing remote; elsewhere=%d ambiguous=%d duplicate-local=%d (exact=%d message-id=%d header=%d)", len(locals), action, uploaded, adoptAction, adopted, elsewhere, ambiguous, duplicates, duplicateExact, duplicateMessageID, duplicateHeader))
+		r.Set(a.Name, box.FullName, fmt.Sprintf("upload-existing: %d local untagged; %s %d; %s %d existing remote; elsewhere=%d ambiguous=%d duplicate-local=%d %s (exact=%d message-id=%d header=%d)", len(locals), action, uploaded, adoptAction, adopted, elsewhere, ambiguous, duplicates, duplicateAction, duplicateExact, duplicateMessageID, duplicateHeader))
 		out.Uploaded += uploaded
 		out.Adopted += adopted
 		out.Elsewhere += elsewhere
@@ -265,6 +289,7 @@ func countDuplicateMethod(method string, exact, messageID, header *int) {
 func buildExistingRemoteIndex(ctx context.Context, c *jmap.Client, a *config.Account, boxes []jmap.Mailbox, r status.Reporter) (*existingRemoteIndex, map[string]jmap.Mailbox, error) {
 	index := &existingRemoteIndex{
 		locations: map[string]map[string]bool{},
+		migrated:  map[string]bool{},
 	}
 	resolved := map[string]jmap.Mailbox{}
 	seenID := map[string]bool{}
