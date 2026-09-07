@@ -16,7 +16,7 @@ import (
 	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/syncer"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 func main() {
 	if err := run(); err != nil {
@@ -206,6 +206,10 @@ local = "INBOX"
 [[accounts.mailboxes]]
 remote = "role:sent"
 local = "Sent"
+
+[[accounts.mailboxes]]
+remote = "Archive"
+local = "Archive"
 
 [[accounts.mailboxes]]
 remote = "Archive/Projects"
