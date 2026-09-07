@@ -18,12 +18,15 @@ type UploadExistingOptions struct {
 }
 
 type UploadExistingSummary struct {
-	Uploaded   int
-	Adopted    int
-	Elsewhere  int
-	Ambiguous  int
-	Duplicates int
-	Skipped    int
+	Uploaded             int
+	Adopted              int
+	Elsewhere            int
+	Ambiguous            int
+	Duplicates           int
+	DuplicateExact       int
+	DuplicateMessageID   int
+	DuplicateHeader      int
+	Skipped              int
 }
 
 type existingRemoteIndex struct {
@@ -76,6 +79,9 @@ func UploadExisting(ctx context.Context, cfg *config.Config, accountNames []stri
 		total.Elsewhere += summary.Elsewhere
 		total.Ambiguous += summary.Ambiguous
 		total.Duplicates += summary.Duplicates
+		total.DuplicateExact += summary.DuplicateExact
+		total.DuplicateMessageID += summary.DuplicateMessageID
+		total.DuplicateHeader += summary.DuplicateHeader
 		total.Skipped += summary.Skipped
 		if err != nil {
 			return total, fmt.Errorf("account %s: %w", a.Name, err)
@@ -127,11 +133,12 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 
 		uploaded, adopted := 0, 0
 		elsewhere, ambiguous, duplicates, skipped := 0, 0, 0, 0
+		duplicateExact, duplicateMessageID, duplicateHeader := 0, 0, 0
 		for _, local := range locals {
 			if err := ctx.Err(); err != nil {
 				return out, err
 			}
-			matches, _ := matchRemoteDetailed(local.Raw, index.messages, map[string]bool{})
+			matches, method := matchRemoteDetailed(local.Raw, index.messages, map[string]bool{})
 			if len(matches) > 1 {
 				ambiguous++
 				skipped++
@@ -141,9 +148,10 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 			if len(matches) == 1 {
 				remoteID := matches[0].ID
 				if strings.HasPrefix(remoteID, "planned-upload-") {
-					// Another identical local-only file in this same dry run has
+					// Another matching local-only file in this same dry run has
 					// already been selected for upload. Do not count it twice.
 					duplicates++
+					countDuplicateMethod(method, &duplicateExact, &duplicateMessageID, &duplicateHeader)
 					skipped++
 					continue
 				}
@@ -165,6 +173,7 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 						// The server message already has a healthy tracked local
 						// copy. This untagged file is a duplicate, not an adoption.
 						duplicates++
+						countDuplicateMethod(method, &duplicateExact, &duplicateMessageID, &duplicateHeader)
 						skipped++
 						continue
 					}
@@ -228,15 +237,29 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 			action = "would upload"
 			adoptAction = "would adopt"
 		}
-		r.Set(a.Name, box.FullName, fmt.Sprintf("upload-existing: %d local untagged; %s %d; %s %d existing remote; elsewhere=%d ambiguous=%d duplicate-local=%d", len(locals), action, uploaded, adoptAction, adopted, elsewhere, ambiguous, duplicates))
+		r.Set(a.Name, box.FullName, fmt.Sprintf("upload-existing: %d local untagged; %s %d; %s %d existing remote; elsewhere=%d ambiguous=%d duplicate-local=%d (exact=%d message-id=%d header=%d)", len(locals), action, uploaded, adoptAction, adopted, elsewhere, ambiguous, duplicates, duplicateExact, duplicateMessageID, duplicateHeader))
 		out.Uploaded += uploaded
 		out.Adopted += adopted
 		out.Elsewhere += elsewhere
 		out.Ambiguous += ambiguous
 		out.Duplicates += duplicates
+		out.DuplicateExact += duplicateExact
+		out.DuplicateMessageID += duplicateMessageID
+		out.DuplicateHeader += duplicateHeader
 		out.Skipped += skipped
 	}
 	return out, nil
+}
+
+func countDuplicateMethod(method string, exact, messageID, header *int) {
+	switch method {
+	case "exact":
+		*exact++
+	case "message-id":
+		*messageID++
+	case "header":
+		*header++
+	}
 }
 
 func buildExistingRemoteIndex(ctx context.Context, c *jmap.Client, a *config.Account, boxes []jmap.Mailbox, r status.Reporter) (*existingRemoteIndex, map[string]jmap.Mailbox, error) {
