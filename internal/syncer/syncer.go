@@ -101,7 +101,9 @@ func syncIMAP(ctx context.Context, cfg *config.Config, a *config.Account, r stat
 			return err
 		}
 
-		// First, detect messages deliberately removed from the Maildir.
+		// First, detect messages deliberately removed from the Maildir. Before
+		// treating a missing file as a deletion, look for the same stable key
+		// in another mapped Maildir and propagate that as a server-side move.
 		for key, e := range copyEntries(s.Entries) {
 			if e.Protocol != "imap" || e.RemoteMailbox != mapping.Remote || e.LocalMailbox != mapping.Local {
 				continue
@@ -113,10 +115,48 @@ func syncIMAP(ctx context.Context, cfg *config.Config, a *config.Account, r stat
 			if exists || !a.PropagateDeletes {
 				continue
 			}
+
+			move, err := findTrackedMove(a, mapping, e.FileKey)
+			if err != nil {
+				return err
+			}
 			uid64, err := strconv.ParseUint(e.RemoteID, 10, 32)
 			if err != nil {
 				return fmt.Errorf("bad UID in state: %q", e.RemoteID)
 			}
+			if move != nil {
+				if move.Remote == mapping.Remote {
+					e.LocalMailbox = move.Local
+					s.Entries[key] = e
+					if err := s.Save(path); err != nil {
+						return err
+					}
+					continue
+				}
+				r.Set(a.Name, mapping.Remote, fmt.Sprintf("moving locally moved message to %s", move.Remote))
+				newUID, err := c.MoveUID(uint32(uid64), move.Remote)
+				if err != nil {
+					return err
+				}
+				newID := strconv.FormatUint(uint64(newUID), 10)
+				newKey := state.Key("imap", move.Remote, newID)
+				if existing, ok := s.Entries[newKey]; ok && existing.FileKey != e.FileKey {
+					return fmt.Errorf("destination IMAP state collision for mailbox %q UID %s", move.Remote, newID)
+				}
+				delete(s.Entries, key)
+				s.Entries[newKey] = state.Entry{
+					Protocol:      "imap",
+					RemoteMailbox: move.Remote,
+					RemoteID:      newID,
+					LocalMailbox:  move.Local,
+					FileKey:       e.FileKey,
+				}
+				if err := s.Save(path); err != nil {
+					return err
+				}
+				continue
+			}
+
 			r.Set(a.Name, mapping.Remote, "deleting locally removed message from server")
 			if err := c.DeleteUID(uint32(uid64), a.IMAP.AllowExpungeWithoutUIDPlus); err != nil {
 				return err
@@ -215,7 +255,7 @@ func syncJMAP(ctx context.Context, cfg *config.Config, a *config.Account, r stat
 		if err != nil {
 			return err
 		}
-		r.Set(a.Name, box.FullName, "checking local deletions")
+		r.Set(a.Name, box.FullName, "checking local deletions and moves")
 		dir := maildir.Open(localMailboxPath(a, mapping.Local))
 		if err := dir.Ensure(); err != nil {
 			return err
@@ -231,6 +271,48 @@ func syncJMAP(ctx context.Context, cfg *config.Config, a *config.Account, r stat
 			if exists || !a.PropagateDeletes {
 				continue
 			}
+
+			move, err := findTrackedMove(a, mapping, e.FileKey)
+			if err != nil {
+				return err
+			}
+			if move != nil {
+				if move.Remote == mapping.Remote {
+					e.LocalMailbox = move.Local
+					s.Entries[key] = e
+					if err := s.Save(path); err != nil {
+						return err
+					}
+					continue
+				}
+				destBox, err := jmap.ResolveMailbox(move.Remote, boxes)
+				if err != nil {
+					return err
+				}
+				r.Set(a.Name, box.FullName, fmt.Sprintf("moving locally moved message to %s", destBox.FullName))
+				if err := c.MoveBetweenMailboxes(ctx, e.RemoteID, box.ID, destBox.ID); err != nil {
+					return err
+				}
+				newKey := state.Key("jmap", move.Remote, e.RemoteID)
+				if existing, ok := s.Entries[newKey]; ok && newKey != key && existing.FileKey != e.FileKey {
+					return fmt.Errorf("destination JMAP state collision for mailbox %q email %s", move.Remote, e.RemoteID)
+				}
+				if newKey != key {
+					delete(s.Entries, key)
+				}
+				s.Entries[newKey] = state.Entry{
+					Protocol:      "jmap",
+					RemoteMailbox: move.Remote,
+					RemoteID:      e.RemoteID,
+					LocalMailbox:  move.Local,
+					FileKey:       e.FileKey,
+				}
+				if err := s.Save(path); err != nil {
+					return err
+				}
+				continue
+			}
+
 			r.Set(a.Name, box.FullName, "removing locally deleted message from remote mailbox")
 			if err := c.RemoveFromMailbox(ctx, e.RemoteID, box.ID); err != nil {
 				return err
