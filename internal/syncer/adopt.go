@@ -41,7 +41,7 @@ type AdoptSummary struct {
 
 // AdoptExisting is a one-shot migration for mail that predates MailSalonSync's
 // stable filename markers. It never uploads local messages and never changes
-// remote mailbox membership. Existing state is preserved; untracked local mail
+// remote mailbox membership. Existing state is preserved; untagged local mail
 // is adopted only when it uniquely matches a message already present in the
 // corresponding remote mailbox.
 func AdoptExisting(ctx context.Context, cfg *config.Config, accountNames []string, opts AdoptOptions, r status.Reporter) (AdoptSummary, error) {
@@ -132,8 +132,14 @@ func adoptIMAP(ctx context.Context, cfg *config.Config, a *config.Account, opts 
 		for _, uid := range uids {
 			id := strconv.FormatUint(uint64(uid), 10)
 			key := state.Key("imap", mapping.Remote, id)
-			if _, exists := s.Entries[key]; exists {
-				continue
+			if e, exists := s.Entries[key]; exists {
+				needs, err := trackedEntryNeedsAdoption(a, e)
+				if err != nil {
+					return out, err
+				}
+				if !needs {
+					continue
+				}
 			}
 			msg, err := c.UIDFetch(uid)
 			if err != nil {
@@ -196,7 +202,17 @@ func adoptJMAP(ctx context.Context, cfg *config.Config, a *config.Account, opts 
 		}
 		var wanted []string
 		for _, id := range ids {
-			if _, exists := s.Entries[state.Key("jmap", mapping.Remote, id)]; !exists {
+			key := state.Key("jmap", mapping.Remote, id)
+			e, exists := s.Entries[key]
+			if !exists {
+				wanted = append(wanted, id)
+				continue
+			}
+			needs, err := trackedEntryNeedsAdoption(a, e)
+			if err != nil {
+				return out, err
+			}
+			if needs {
 				wanted = append(wanted, id)
 			}
 		}
@@ -229,6 +245,28 @@ func adoptJMAP(ctx context.Context, cfg *config.Config, a *config.Account, opts 
 		}
 	}
 	return out, nil
+}
+
+// trackedEntryNeedsAdoption reports whether an existing state entry still needs
+// migration to the current stable mailsalonsync-* filename marker. Legacy state
+// entries and state entries whose tagged file has gone missing are eligible.
+// Correctly tracked tagged messages are deliberately excluded so adopt-existing
+// cannot steal an identity from a healthy local copy in another mapped folder.
+func trackedEntryNeedsAdoption(a *config.Account, e state.Entry) (bool, error) {
+	if !strings.HasPrefix(e.FileKey, "mailsalonsync-") {
+		return true, nil
+	}
+	for _, mapping := range a.Mailboxes {
+		dir := maildir.Open(localMailboxPath(a, mapping.Local))
+		_, exists, err := dir.Find(e.FileKey)
+		if err != nil {
+			return false, err
+		}
+		if exists {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func adoptMatches(a *config.Account, mapping config.Mailbox, protocol string, locals []localAdoptMessage, remotes []remoteAdoptMessage, s *state.State, statePath string, dryRun bool, r status.Reporter) (int, int, error) {
