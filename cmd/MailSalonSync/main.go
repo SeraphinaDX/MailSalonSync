@@ -16,7 +16,7 @@ import (
 	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/syncer"
 )
 
-const version = "0.4.6"
+const version = "0.4.7"
 
 func main() {
 	if err := run(); err != nil {
