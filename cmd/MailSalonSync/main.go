@@ -16,7 +16,7 @@ import (
 	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/syncer"
 )
 
-const version = "0.4.7"
+const version = "0.5.0"
 
 func main() {
 	if err := run(); err != nil {
@@ -51,6 +51,8 @@ func run() error {
 		return runSync(*configPath, args[1:], *plain)
 	case "adopt-existing":
 		return runAdoptExisting(*configPath, args[1:], *plain)
+	case "upload-existing":
+		return runUploadExisting(*configPath, args[1:], *plain)
 	case "jmap-send":
 		return runJMAPSend(*configPath, args[1:], *plain)
 	case "check-config":
@@ -136,6 +138,42 @@ func runAdoptExisting(path string, args []string, plain bool) error {
 	return nil
 }
 
+func runUploadExisting(path string, args []string, plain bool) error {
+	fs := flag.NewFlagSet("upload-existing", flag.ContinueOnError)
+	accounts := fs.String("account", "", "account name or comma-separated account names; default is all JMAP accounts")
+	dryRun := fs.Bool("dry-run", false, "report local-only messages without importing or renaming them")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	names := parseAccountNames(*accounts)
+	var summary syncer.UploadExistingSummary
+	task := func(r status.Reporter) error {
+		s, err := syncer.UploadExisting(ctx, cfg, names, syncer.UploadExistingOptions{DryRun: *dryRun}, r)
+		summary = s
+		return err
+	}
+	if plain {
+		err = status.RunPlain(task)
+	} else {
+		err = status.Run(cancel, task)
+	}
+	if err != nil {
+		return err
+	}
+	if *dryRun {
+		fmt.Printf("dry run: would upload %d message(s); would adopt %d existing remote match(es); skipped %d ambiguous/elsewhere match(es)\n", summary.Uploaded, summary.Adopted, summary.Skipped)
+	} else {
+		fmt.Printf("uploaded %d message(s); adopted %d existing remote match(es); skipped %d ambiguous/elsewhere match(es)\n", summary.Uploaded, summary.Adopted, summary.Skipped)
+	}
+	return nil
+}
+
 func runJMAPSend(path string, args []string, plain bool) error {
 	fs := flag.NewFlagSet("jmap-send", flag.ContinueOnError)
 	accountName := fs.String("account", "", "JMAP account name (required)")
@@ -207,6 +245,7 @@ func usage(fs *flag.FlagSet) {
 	fmt.Fprintln(out, "Usage:")
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] sync [-account NAME[,NAME...]]")
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] adopt-existing [-account NAME[,NAME...]] [-dry-run]")
+	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] upload-existing [-account NAME[,NAME...]] [-dry-run]")
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] jmap-send -account NAME [-file MESSAGE.eml]")
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] check-config")
 	fmt.Fprintln(out, "  MailSalonSync example-config")
