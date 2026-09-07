@@ -56,6 +56,7 @@ func AdoptExisting(ctx context.Context, cfg *config.Config, accountNames []strin
 			if _, err := cfg.Account(n); err != nil {
 				return AdoptSummary{}, err
 			}
+		}
 	}
 
 	var total AdoptSummary
