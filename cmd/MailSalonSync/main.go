@@ -16,7 +16,7 @@ import (
 	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/syncer"
 )
 
-const version = "0.3.0"
+const version = "0.4.0"
 
 func main() {
 	if err := run(); err != nil {
@@ -49,6 +49,8 @@ func run() error {
 		return nil
 	case "sync":
 		return runSync(*configPath, args[1:], *plain)
+	case "adopt-existing":
+		return runAdoptExisting(*configPath, args[1:], *plain)
 	case "jmap-send":
 		return runJMAPSend(*configPath, args[1:], *plain)
 	case "check-config":
@@ -66,6 +68,16 @@ func run() error {
 	}
 }
 
+func parseAccounts(raw string) []string {
+	var names []string
+	for _, n := range strings.Split(raw, ",") {
+		if n = strings.TrimSpace(n); n != "" {
+			names = append(names, n)
+		}
+	}
+	return names
+}
+
 func runSync(path string, args []string, plain bool) error {
 	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
 	accounts := fs.String("account", "", "account name or comma-separated account names; default is all")
@@ -78,19 +90,48 @@ func runSync(path string, args []string, plain bool) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	var names []string
-	for _, n := range strings.Split(*accounts, ",") {
-		if n = strings.TrimSpace(n); n != "" {
-			names = append(names, n)
-		}
-	}
 	task := func(r status.Reporter) error {
-		return syncer.Sync(ctx, cfg, names, r)
+		return syncer.Sync(ctx, cfg, parseAccounts(*accounts), r)
 	}
 	if plain {
 		return status.RunPlain(task)
 	}
 	return status.Run(cancel, task)
+}
+
+func runAdoptExisting(path string, args []string, plain bool) error {
+	fs := flag.NewFlagSet("adopt-existing", flag.ContinueOnError)
+	accounts := fs.String("account", "", "account name or comma-separated account names; default is all")
+	dryRun := fs.Bool("dry-run", false, "report matches without renaming files or updating state")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	var summary syncer.AdoptSummary
+	task := func(r status.Reporter) error {
+		var err error
+		summary, err = syncer.AdoptExisting(ctx, cfg, parseAccounts(*accounts), syncer.AdoptOptions{DryRun: *dryRun}, r)
+		return err
+	}
+	if plain {
+		err = status.RunPlain(task)
+	} else {
+		err = status.Run(cancel, task)
+	}
+	if err != nil {
+		return err
+	}
+	mode := "adopted"
+	if *dryRun {
+		mode = "would adopt"
+	}
+	fmt.Printf("%s %d existing message(s); skipped %d\n", mode, summary.Adopted, summary.Skipped)
+	return nil
 }
 
 func runJMAPSend(path string, args []string, plain bool) error {
@@ -163,6 +204,7 @@ func usage(fs *flag.FlagSet) {
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "Usage:")
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] sync [-account NAME[,NAME...]]")
+	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] adopt-existing [-account NAME[,NAME...]] [-dry-run]")
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] jmap-send -account NAME [-file MESSAGE.eml]")
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] check-config")
 	fmt.Fprintln(out, "  MailSalonSync example-config")
