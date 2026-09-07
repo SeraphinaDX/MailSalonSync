@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -16,7 +17,7 @@ import (
 	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/syncer"
 )
 
-const version = "0.5.3"
+const version = "0.5.4"
 
 func main() {
 	if err := run(); err != nil {
@@ -138,6 +139,20 @@ func runAdoptExisting(path string, args []string, plain bool) error {
 	return nil
 }
 
+func printUploadSummary(prefix string, summary syncer.UploadExistingSummary) {
+	fmt.Printf("%s uploaded=%d; adopted=%d; elsewhere=%d; ambiguous=%d; duplicate-local-to-backup=%d (exact=%d message-id=%d header=%d)\n",
+		prefix,
+		summary.Uploaded,
+		summary.Adopted,
+		summary.Elsewhere,
+		summary.Ambiguous,
+		summary.Duplicates,
+		summary.DuplicateExact,
+		summary.DuplicateMessageID,
+		summary.DuplicateHeader,
+	)
+}
+
 func runUploadExisting(path string, args []string, plain bool) error {
 	fs := flag.NewFlagSet("upload-existing", flag.ContinueOnError)
 	accounts := fs.String("account", "", "account name or comma-separated account names; default is all JMAP accounts")
@@ -164,6 +179,9 @@ func runUploadExisting(path string, args []string, plain bool) error {
 		err = status.Run(cancel, task)
 	}
 	if err != nil {
+		if errors.Is(err, syncer.ErrUploadQuotaExceeded) {
+			printUploadSummary("upload-existing paused safely:", summary)
+		}
 		return err
 	}
 	if *dryRun {
