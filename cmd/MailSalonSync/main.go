@@ -16,7 +16,7 @@ import (
 	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/syncer"
 )
 
-const version = "0.5.2"
+const version = "0.5.3"
 
 func main() {
 	if err := run(); err != nil {
@@ -167,9 +167,9 @@ func runUploadExisting(path string, args []string, plain bool) error {
 		return err
 	}
 	if *dryRun {
-		fmt.Printf("dry run: would upload %d message(s); would adopt %d existing remote match(es); elsewhere=%d; ambiguous=%d; duplicate-local=%d (exact=%d message-id=%d header=%d)\n", summary.Uploaded, summary.Adopted, summary.Elsewhere, summary.Ambiguous, summary.Duplicates, summary.DuplicateExact, summary.DuplicateMessageID, summary.DuplicateHeader)
+		fmt.Printf("dry run: would upload %d message(s); would adopt %d existing remote match(es); elsewhere=%d; ambiguous=%d; duplicate-local-to-backup=%d (exact=%d message-id=%d header=%d)\n", summary.Uploaded, summary.Adopted, summary.Elsewhere, summary.Ambiguous, summary.Duplicates, summary.DuplicateExact, summary.DuplicateMessageID, summary.DuplicateHeader)
 	} else {
-		fmt.Printf("uploaded %d message(s); adopted %d existing remote match(es); elsewhere=%d; ambiguous=%d; duplicate-local=%d (exact=%d message-id=%d header=%d)\n", summary.Uploaded, summary.Adopted, summary.Elsewhere, summary.Ambiguous, summary.Duplicates, summary.DuplicateExact, summary.DuplicateMessageID, summary.DuplicateHeader)
+		fmt.Printf("uploaded %d message(s); adopted %d existing remote match(es); elsewhere=%d; ambiguous=%d; retired duplicate-local-to-backup=%d (exact=%d message-id=%d header=%d)\n", summary.Uploaded, summary.Adopted, summary.Elsewhere, summary.Ambiguous, summary.Duplicates, summary.DuplicateExact, summary.DuplicateMessageID, summary.DuplicateHeader)
 	}
 	return nil
 }
