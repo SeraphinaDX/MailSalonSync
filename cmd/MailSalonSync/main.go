@@ -16,7 +16,7 @@ import (
 	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/syncer"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 func main() {
 	if err := run(); err != nil {
@@ -28,7 +28,8 @@ func main() {
 func run() error {
 	root := flag.NewFlagSet("MailSalonSync", flag.ContinueOnError)
 	root.SetOutput(os.Stderr)
-	configPath := root.String("config", defaultConfigPath(), "path to JSON config")
+	configPath := root.String("config", defaultConfigPath(), "path to TOML config")
+	plain := root.Bool("plain", false, "disable interactive status UI and run synchronously")
 	root.Usage = func() { usage(root) }
 	if err := root.Parse(os.Args[1:]); err != nil {
 		return err
@@ -47,9 +48,9 @@ func run() error {
 		fmt.Print(exampleConfig)
 		return nil
 	case "sync":
-		return runSync(*configPath, args[1:])
+		return runSync(*configPath, args[1:], *plain)
 	case "jmap-send":
-		return runJMAPSend(*configPath, args[1:])
+		return runJMAPSend(*configPath, args[1:], *plain)
 	case "check-config":
 		_, err := config.Load(*configPath)
 		if err != nil {
@@ -65,7 +66,7 @@ func run() error {
 	}
 }
 
-func runSync(path string, args []string) error {
+func runSync(path string, args []string, plain bool) error {
 	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
 	accounts := fs.String("account", "", "account name or comma-separated account names; default is all")
 	if err := fs.Parse(args); err != nil {
@@ -83,12 +84,16 @@ func runSync(path string, args []string) error {
 			names = append(names, n)
 		}
 	}
-	return status.Run(cancel, func(r status.Reporter) error {
+	task := func(r status.Reporter) error {
 		return syncer.Sync(ctx, cfg, names, r)
-	})
+	}
+	if plain {
+		return status.RunPlain(task)
+	}
+	return status.Run(cancel, task)
 }
 
-func runJMAPSend(path string, args []string) error {
+func runJMAPSend(path string, args []string, plain bool) error {
 	fs := flag.NewFlagSet("jmap-send", flag.ContinueOnError)
 	accountName := fs.String("account", "", "JMAP account name (required)")
 	file := fs.String("file", "", "RFC 5322 message file; stdin if omitted or '-' ")
@@ -121,11 +126,16 @@ func runJMAPSend(path string, args []string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	var sentID string
-	err = status.Run(cancel, func(r status.Reporter) error {
+	task := func(r status.Reporter) error {
 		id, err := syncer.SendJMAP(ctx, a, raw, r)
 		sentID = id
 		return err
-	})
+	}
+	if plain {
+		err = status.RunPlain(task)
+	} else {
+		err = status.Run(cancel, task)
+	}
 	if err != nil {
 		if sentID != "" {
 			return fmt.Errorf("%w (imported draft email id: %s)", err, sentID)
@@ -138,13 +148,13 @@ func runJMAPSend(path string, args []string) error {
 
 func defaultConfigPath() string {
 	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
-		return filepath.Join(x, "MailSalonSync", "config.json")
+		return filepath.Join(x, "MailSalonSync", "config.toml")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "config.json"
+		return "config.toml"
 	}
-	return filepath.Join(home, ".config", "MailSalonSync", "config.json")
+	return filepath.Join(home, ".config", "MailSalonSync", "config.toml")
 }
 
 func usage(fs *flag.FlagSet) {
@@ -152,8 +162,8 @@ func usage(fs *flag.FlagSet) {
 	fmt.Fprintln(out, "MailSalonSync - Maildir synchronizer for IMAP and JMAP")
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "Usage:")
-	fmt.Fprintln(out, "  MailSalonSync [-config PATH] sync [-account NAME[,NAME...]]")
-	fmt.Fprintln(out, "  MailSalonSync [-config PATH] jmap-send -account NAME [-file MESSAGE.eml]")
+	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] sync [-account NAME[,NAME...]]")
+	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] jmap-send -account NAME [-file MESSAGE.eml]")
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] check-config")
 	fmt.Fprintln(out, "  MailSalonSync example-config")
 	fmt.Fprintln(out, "  MailSalonSync version")
@@ -161,44 +171,51 @@ func usage(fs *flag.FlagSet) {
 	fs.PrintDefaults()
 }
 
-const exampleConfig = `{
-  "state_dir": "~/.local/state/MailSalonSync",
-  "accounts": [
-    {
-      "name": "personal-imap",
-      "protocol": "imap",
-      "local_root": "~/Mail/personal",
-      "propagate_deletes": true,
-      "mailboxes": [
-        { "remote": "INBOX", "local": "INBOX" },
-        { "remote": "Archive", "local": "Archive" }
-      ],
-      "imap": {
-        "address": "imap.example.com:993",
-        "username": "me@example.com",
-        "password_env": "PERSONAL_IMAP_PASSWORD",
-        "security": "tls"
-      }
-    },
-    {
-      "name": "work-jmap",
-      "protocol": "jmap",
-      "local_root": "~/Mail/work",
-      "propagate_deletes": true,
-      "mailboxes": [
-        { "remote": "role:inbox", "local": "INBOX" },
-        { "remote": "role:sent", "local": "Sent" },
-        { "remote": "Archive/Projects", "local": "Projects" }
-      ],
-      "jmap": {
-        "session_url": "https://mail.example.net/.well-known/jmap",
-        "auth": "basic",
-        "username": "me@example.net",
-        "password_command": "pass show mail/example.net",
-        "drafts_mailbox": "role:drafts",
-        "sent_mailbox": "role:sent"
-      }
-    }
-  ]
-}
+const exampleConfig = `state_dir = "~/.local/state/MailSalonSync"
+
+[[accounts]]
+name = "personal-imap"
+protocol = "imap"
+local_root = "~/Mail/personal"
+propagate_deletes = true
+
+[[accounts.mailboxes]]
+remote = "INBOX"
+local = "INBOX"
+
+[[accounts.mailboxes]]
+remote = "Archive"
+local = "Archive"
+
+[accounts.imap]
+address = "imap.example.com:993"
+username = "me@example.com"
+password_env = "PERSONAL_IMAP_PASSWORD"
+security = "tls"
+
+[[accounts]]
+name = "work-jmap"
+protocol = "jmap"
+local_root = "~/Mail/work"
+propagate_deletes = true
+
+[[accounts.mailboxes]]
+remote = "role:inbox"
+local = "INBOX"
+
+[[accounts.mailboxes]]
+remote = "role:sent"
+local = "Sent"
+
+[[accounts.mailboxes]]
+remote = "Archive/Projects"
+local = "Projects"
+
+[accounts.jmap]
+session_url = "https://mail.example.net/.well-known/jmap"
+auth = "basic"
+username = "me@example.net"
+password_command = "pass show mail/example.net"
+drafts_mailbox = "role:drafts"
+sent_mailbox = "role:sent"
 `

@@ -7,9 +7,9 @@ The basic flow is:
 ```text
 mu4e
   |
-  +-- receive/sync --> MailSalonSync sync --> IMAP/JMAP --> Maildir
+  +-- receive/sync --> MailSalonSync -plain sync --> IMAP/JMAP --> Maildir
   |
-  +-- send ---------> MailSalonSync jmap-send --> JMAP
+  +-- send ---------> MailSalonSync -plain jmap-send --> JMAP
 ```
 
 ### Maildir setup
@@ -22,7 +22,7 @@ For example:
 ~/Maildir
 ```
 
-The corresponding MailSalonSync account should have its local mail directory configured as `~/Maildir`.
+The corresponding MailSalonSync account should have its local mail directory configured as `~/Maildir` in `config.toml`.
 
 If `mu` has not yet been initialized for this Maildir, initialize and index it:
 
@@ -42,7 +42,7 @@ mu info
 The following example assumes:
 
 - MailSalonSync is installed at `~/bin/MailSalonSync`
-- MailSalonSync's configuration is stored at `~/.config/MailSalonSync/config.json`
+- MailSalonSync's configuration is stored at `~/.config/MailSalonSync/config.toml`
 - The MailSalonSync account is named `example-jmap`
 - Local mail is stored in `~/Maildir`
 - The email address is `user@example.com`
@@ -56,44 +56,40 @@ The following example assumes:
 
 ;; --- MailSalonSync Setup ---
 
-;; MailSalonSync executable.
 (setq my-mailsalonsync-program
       (expand-file-name "~/bin/MailSalonSync"))
 
-;; MailSalonSync configuration file.
 (setq my-mailsalonsync-config
-      (expand-file-name "~/.config/MailSalonSync/config.json"))
+      (expand-file-name "~/.config/MailSalonSync/config.toml"))
 
-;; Account name as defined in MailSalonSync config.json.
 (setq my-mailsalonsync-account "example-jmap")
 
-;; Synchronize mail through MailSalonSync.
+;; mu4e invokes its retrieval command through a PTY. Force MailSalonSync's
+;; synchronous line-oriented mode so the process returns only after sync is
+;; complete and mu can safely begin indexing.
 (setq mu4e-get-mail-command
       (mapconcat
        #'shell-quote-argument
        (list my-mailsalonsync-program
              (concat "-config=" my-mailsalonsync-config)
+             "-plain"
              "sync")
        " "))
 
-;; Automatically synchronize every five minutes.
 (setq mu4e-update-interval 300)
 
 ;; --- Folder Mappings ---
-
 (setq mu4e-drafts-folder "/Drafts"
       mu4e-sent-folder   "/Sent"
       mu4e-trash-folder  "/Trash"
       mu4e-refile-folder "/Archive")
 
 ;; --- User Identity ---
-
 (setq user-mail-address "user@example.com"
       user-full-name "Example User"
       mu4e-user-mail-address-list '("user@example.com"))
 
 ;; --- Sending Mail Through MailSalonSync/JMAP ---
-
 (defun my-mailsalonsync-send-mail ()
   "Send the current message using MailSalonSync JMAP."
   (let ((output-buffer
@@ -110,6 +106,7 @@ The following example assumes:
             output-buffer
             nil
             (concat "-config=" my-mailsalonsync-config)
+            "-plain"
             "jmap-send"
             "-account"
             my-mailsalonsync-account)))
@@ -127,7 +124,6 @@ The following example assumes:
       #'my-mailsalonsync-send-mail)
 
 ;; --- Optional Mu4e Settings ---
-
 (setq mu4e-change-filenames-when-moving t)
 
 (setq mu4e-view-show-addresses t
@@ -147,14 +143,15 @@ The value of:
 (setq my-mailsalonsync-account "example-jmap")
 ```
 
-must match the `name` of the corresponding account in the MailSalonSync configuration.
+must match the `name` of the corresponding account in the MailSalonSync TOML configuration.
 
-For example, if the MailSalonSync configuration contains:
+For example:
 
-```json
-{
-  "name": "personal-jmap"
-}
+```toml
+[[accounts]]
+name = "personal-jmap"
+protocol = "jmap"
+local_root = "~/Maildir"
 ```
 
 then the Emacs configuration should contain:
@@ -171,13 +168,13 @@ From mu4e, running:
 M-x mu4e-update-mail-and-index
 ```
 
-causes mu4e to execute the configured MailSalonSync command:
+causes mu4e to execute:
 
 ```sh
-~/bin/MailSalonSync -config=~/.config/MailSalonSync/config.json sync
+~/bin/MailSalonSync -config=~/.config/MailSalonSync/config.toml -plain sync
 ```
 
-MailSalonSync updates the Maildir, after which `mu` indexes the resulting messages for mu4e.
+`-plain` is important for mu4e. mu4e allocates a pseudo-terminal for the retrieval process; without the explicit flag, a terminal-aware program may mistakenly start an interactive UI. MailSalonSync's plain mode is synchronous, so it returns success only after the sync operation has completed. mu4e can then safely run `mu index` against the updated Maildir.
 
 ### Sending mail
 
@@ -186,7 +183,7 @@ Outgoing messages do not require `msmtp` or Emacs SMTP configuration.
 The custom `my-mailsalonsync-send-mail` function passes the completed email message to:
 
 ```sh
-MailSalonSync jmap-send -account example-jmap
+MailSalonSync -plain jmap-send -account example-jmap
 ```
 
 MailSalonSync then submits the message through the configured JMAP account.
@@ -208,6 +205,12 @@ smtpmail-auth-credentials
 can be removed when MailSalonSync is handling outgoing JMAP mail.
 
 ### Troubleshooting
+
+Validate the TOML first:
+
+```sh
+MailSalonSync -config=~/.config/MailSalonSync/config.toml check-config
+```
 
 If mu4e displays mail from an old Maildir, check the Maildir stored in the `mu` database:
 
