@@ -18,6 +18,7 @@ var ErrUploadQuotaExceeded = errors.New("JMAP upload quota exceeded")
 
 type UploadExistingOptions struct {
 	DryRun bool
+	Limit  int
 }
 
 type UploadExistingSummary struct {
@@ -30,6 +31,7 @@ type UploadExistingSummary struct {
 	DuplicateMessageID int
 	DuplicateHeader    int
 	Skipped            int
+	BatchLimitReached  bool
 }
 
 type existingRemoteIndex struct {
@@ -50,7 +52,8 @@ type existingRemoteIndex struct {
 // interrupted migrations. A match in another mailbox is skipped rather than
 // duplicated. Additional local copies of a message migrated by this run are
 // moved to state_dir/adopt-backup so only the tracked canonical copy remains in
-// active Maildir folders.
+// active Maildir folders. Limit, when greater than zero, caps actual uploads
+// across all selected accounts for this invocation; dry runs ignore the cap.
 func UploadExisting(ctx context.Context, cfg *config.Config, accountNames []string, opts UploadExistingOptions, r status.Reporter) (UploadExistingSummary, error) {
 	selected := map[string]bool{}
 	for _, n := range accountNames {
@@ -82,10 +85,25 @@ func UploadExisting(ctx context.Context, cfg *config.Config, accountNames []stri
 			r.Set(a.Name, "", "skipping upload-existing: JMAP only")
 			continue
 		}
-		summary, err := uploadExistingJMAP(ctx, cfg, a, opts, r)
+
+		accountOpts := opts
+		if !opts.DryRun && opts.Limit > 0 {
+			remaining := opts.Limit - total.Uploaded
+			if remaining <= 0 {
+				total.BatchLimitReached = true
+				return total, nil
+			}
+			accountOpts.Limit = remaining
+		}
+
+		summary, err := uploadExistingJMAP(ctx, cfg, a, accountOpts, r)
 		addUploadSummary(&total, summary)
 		if err != nil {
 			return total, fmt.Errorf("account %s: %w", a.Name, err)
+		}
+		if summary.BatchLimitReached {
+			total.BatchLimitReached = true
+			return total, nil
 		}
 	}
 	return total, nil
@@ -233,6 +251,15 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 				continue
 			}
 
+			// Process duplicate cleanup and adoption freely, but stop before the
+			// next actual upload once this invocation has reached its batch cap.
+			if opts.Limit > 0 && out.Uploaded+uploaded >= opts.Limit {
+				flushMailboxSummary()
+				out.BatchLimitReached = true
+				r.Set(a.Name, box.FullName, fmt.Sprintf("batch limit reached after %d upload(s); progress saved", out.Uploaded))
+				return out, nil
+			}
+
 			seen := localMaildirSeen(local.Path)
 			remoteID, err := c.ImportRaw(ctx, local.Raw, box.ID, seen)
 			if err != nil {
@@ -291,6 +318,7 @@ func addUploadSummary(dst *UploadExistingSummary, src UploadExistingSummary) {
 	dst.DuplicateMessageID += src.DuplicateMessageID
 	dst.DuplicateHeader += src.DuplicateHeader
 	dst.Skipped += src.Skipped
+	dst.BatchLimitReached = dst.BatchLimitReached || src.BatchLimitReached
 }
 
 func countDuplicateMethod(method string, exact, messageID, header *int) {
