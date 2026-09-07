@@ -16,7 +16,7 @@ import (
 	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/syncer"
 )
 
-const version = "0.5.0"
+const version = "0.5.1"
 
 func main() {
 	if err := run(); err != nil {
@@ -167,9 +167,9 @@ func runUploadExisting(path string, args []string, plain bool) error {
 		return err
 	}
 	if *dryRun {
-		fmt.Printf("dry run: would upload %d message(s); would adopt %d existing remote match(es); skipped %d ambiguous/elsewhere match(es)\n", summary.Uploaded, summary.Adopted, summary.Skipped)
+		fmt.Printf("dry run: would upload %d message(s); would adopt %d existing remote match(es); elsewhere=%d; ambiguous=%d; duplicate-local=%d\n", summary.Uploaded, summary.Adopted, summary.Elsewhere, summary.Ambiguous, summary.Duplicates)
 	} else {
-		fmt.Printf("uploaded %d message(s); adopted %d existing remote match(es); skipped %d ambiguous/elsewhere match(es)\n", summary.Uploaded, summary.Adopted, summary.Skipped)
+		fmt.Printf("uploaded %d message(s); adopted %d existing remote match(es); elsewhere=%d; ambiguous=%d; duplicate-local=%d\n", summary.Uploaded, summary.Adopted, summary.Elsewhere, summary.Ambiguous, summary.Duplicates)
 	}
 	return nil
 }
