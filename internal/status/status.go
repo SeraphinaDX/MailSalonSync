@@ -32,6 +32,22 @@ func (r reporter) Set(a, m, text string) { r.ch <- Event{Account: a, Mailbox: m,
 func (r reporter) Added(a, m string)     { r.ch <- Event{Account: a, Mailbox: m, Added: 1} }
 func (r reporter) Deleted(a, m string)   { r.ch <- Event{Account: a, Mailbox: m, Deleted: 1} }
 
+type plainReporter struct{}
+
+func (plainReporter) Set(a, m, text string) {
+	if text == "" {
+		return
+	}
+	where := a
+	if m != "" {
+		where += "/" + m
+	}
+	fmt.Printf("[%s] %s\n", where, text)
+}
+
+func (plainReporter) Added(a, m string)   {}
+func (plainReporter) Deleted(a, m string) {}
+
 type eventMsg Event
 type doneMsg struct{ err error }
 
@@ -118,7 +134,7 @@ func (m model) View() string {
 
 func Run(cancel func(), task func(Reporter) error) error {
 	if !isTerminal(os.Stdout) {
-		return runPlain(task)
+		return RunPlain(task)
 	}
 	events := make(chan Event, 128)
 	uiDone := make(chan error, 1)
@@ -141,20 +157,11 @@ func Run(cancel func(), task func(Reporter) error) error {
 	return <-result
 }
 
-func runPlain(task func(Reporter) error) error {
-	ch := make(chan Event, 128)
-	done := make(chan error, 1)
-	go func() { done <- task(reporter{ch: ch}); close(ch) }()
-	for e := range ch {
-		if e.Message != "" {
-			where := e.Account
-			if e.Mailbox != "" {
-				where += "/" + e.Mailbox
-			}
-			fmt.Printf("[%s] %s\n", where, e.Message)
-		}
-	}
-	return <-done
+// RunPlain runs a task synchronously with line-oriented status output.
+// It is intended for non-interactive callers such as mu4e, which may allocate
+// a PTY even though MailSalonSync should not start its interactive status UI.
+func RunPlain(task func(Reporter) error) error {
+	return task(plainReporter{})
 }
 
 func isTerminal(f *os.File) bool {
