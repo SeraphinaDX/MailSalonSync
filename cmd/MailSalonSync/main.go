@@ -16,7 +16,7 @@ import (
 	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/syncer"
 )
 
-const version = "0.4.0"
+const version = "0.4.1"
 
 func main() {
 	if err := run(); err != nil {
@@ -68,7 +68,7 @@ func run() error {
 	}
 }
 
-func parseAccounts(raw string) []string {
+func parseAccountNames(raw string) []string {
 	var names []string
 	for _, n := range strings.Split(raw, ",") {
 		if n = strings.TrimSpace(n); n != "" {
@@ -90,8 +90,9 @@ func runSync(path string, args []string, plain bool) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	names := parseAccountNames(*accounts)
 	task := func(r status.Reporter) error {
-		return syncer.Sync(ctx, cfg, parseAccounts(*accounts), r)
+		return syncer.Sync(ctx, cfg, names, r)
 	}
 	if plain {
 		return status.RunPlain(task)
@@ -102,7 +103,7 @@ func runSync(path string, args []string, plain bool) error {
 func runAdoptExisting(path string, args []string, plain bool) error {
 	fs := flag.NewFlagSet("adopt-existing", flag.ContinueOnError)
 	accounts := fs.String("account", "", "account name or comma-separated account names; default is all")
-	dryRun := fs.Bool("dry-run", false, "report matches without renaming files or updating state")
+	dryRun := fs.Bool("dry-run", false, "report matches without renaming local files or changing state")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -112,10 +113,11 @@ func runAdoptExisting(path string, args []string, plain bool) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	names := parseAccountNames(*accounts)
 	var summary syncer.AdoptSummary
 	task := func(r status.Reporter) error {
-		var err error
-		summary, err = syncer.AdoptExisting(ctx, cfg, parseAccounts(*accounts), syncer.AdoptOptions{DryRun: *dryRun}, r)
+		s, err := syncer.AdoptExisting(ctx, cfg, names, syncer.AdoptOptions{DryRun: *dryRun}, r)
+		summary = s
 		return err
 	}
 	if plain {
@@ -126,11 +128,11 @@ func runAdoptExisting(path string, args []string, plain bool) error {
 	if err != nil {
 		return err
 	}
-	mode := "adopted"
 	if *dryRun {
-		mode = "would adopt"
+		fmt.Printf("dry run: would adopt %d message(s); skipped %d\n", summary.Adopted, summary.Skipped)
+	} else {
+		fmt.Printf("adopted %d message(s); skipped %d\n", summary.Adopted, summary.Skipped)
 	}
-	fmt.Printf("%s %d existing message(s); skipped %d\n", mode, summary.Adopted, summary.Skipped)
 	return nil
 }
 
