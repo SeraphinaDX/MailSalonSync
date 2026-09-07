@@ -38,6 +38,12 @@ local = "Sent"
 remote = "role:junk"
 local = "Junk"
 
+# A normal manually-created mailbox named Archive works; no JMAP role is
+# required. If your server provides an archive role, role:archive also works.
+[[accounts.mailboxes]]
+remote = "Archive"
+local = "Archive"
+
 [accounts.jmap]
 session_url = "https://mail.example.net/.well-known/jmap"
 auth = "basic"
