@@ -18,15 +18,15 @@ type UploadExistingOptions struct {
 }
 
 type UploadExistingSummary struct {
-	Uploaded             int
-	Adopted              int
-	Elsewhere            int
-	Ambiguous            int
-	Duplicates           int
-	DuplicateExact       int
-	DuplicateMessageID   int
-	DuplicateHeader      int
-	Skipped              int
+	Uploaded           int
+	Adopted            int
+	Elsewhere          int
+	Ambiguous          int
+	Duplicates         int
+	DuplicateExact     int
+	DuplicateMessageID int
+	DuplicateHeader    int
+	Skipped            int
 }
 
 type existingRemoteIndex struct {
@@ -254,11 +254,11 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 func countDuplicateMethod(method string, exact, messageID, header *int) {
 	switch method {
 	case "exact":
-		*exact++
+		(*exact)++
 	case "message-id":
-		*messageID++
+		(*messageID)++
 	case "header":
-		*header++
+		(*header)++
 	}
 }
 
