@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"mime"
 	"net/mail"
 	"os"
 	"path/filepath"
@@ -147,6 +148,7 @@ func adoptIMAP(ctx context.Context, cfg *config.Config, a *config.Account, opts 
 			}
 			remote = append(remote, remoteAdoptMessage{ID: id, Raw: msg.Raw})
 		}
+		r.Set(a.Name, mapping.Remote, fmt.Sprintf("adoption scan: %d untagged local, %d eligible remote", len(locals), len(remote)))
 		adopted, skipped, err := adoptMatches(a, mapping, "imap", locals, remote, s, statePath, opts.DryRun, r)
 		out.Adopted += adopted
 		out.Skipped += skipped
@@ -232,6 +234,7 @@ func adoptJMAP(ctx context.Context, cfg *config.Config, a *config.Account, opts 
 			}
 			remote = append(remote, remoteAdoptMessage{ID: id, Raw: raw})
 		}
+		r.Set(a.Name, box.FullName, fmt.Sprintf("adoption scan: %d untagged local, %d eligible remote", len(locals), len(remote)))
 		adopted, skipped, err := adoptMatches(a, mapping, "jmap", locals, remote, s, statePath, opts.DryRun, r)
 		out.Adopted += adopted
 		out.Skipped += skipped
@@ -272,21 +275,35 @@ func trackedEntryNeedsAdoption(a *config.Account, e state.Entry) (bool, error) {
 func adoptMatches(a *config.Account, mapping config.Mailbox, protocol string, locals []localAdoptMessage, remotes []remoteAdoptMessage, s *state.State, statePath string, dryRun bool, r status.Reporter) (int, int, error) {
 	used := map[string]bool{}
 	adopted, skipped := 0, 0
+	exactMatches, messageIDMatches, headerMatches := 0, 0, 0
+	unmatched, ambiguous, noMessageID := 0, 0, 0
+
 	for _, local := range locals {
-		matches := matchRemote(local.Raw, remotes, used)
+		matches, method := matchRemoteDetailed(local.Raw, remotes, used)
 		if len(matches) != 1 {
 			skipped++
-			if len(matches) == 0 {
-				r.Set(a.Name, mapping.Remote, "skipping unmatched existing local message "+filepath.Base(local.Path))
+			if len(matches) > 1 {
+				ambiguous++
+			} else if messageID(local.Raw) == "" {
+				noMessageID++
 			} else {
-				r.Set(a.Name, mapping.Remote, "skipping ambiguous existing local message "+filepath.Base(local.Path))
+				unmatched++
 			}
 			continue
 		}
+
+		switch method {
+		case "exact":
+			exactMatches++
+		case "message-id":
+			messageIDMatches++
+		case "header":
+			headerMatches++
+		}
+
 		m := matches[0]
 		stateKey := state.Key(protocol, mapping.Remote, m.ID)
 		fileKey := maildir.StableKey(a.Name + "\n" + stateKey)
-		r.Set(a.Name, mapping.Remote, fmt.Sprintf("%sadopting existing message %s", dryRunPrefix(dryRun), filepath.Base(local.Path)))
 		if !dryRun {
 			if _, err := maildir.EnsureStableKey(local.Path, fileKey); err != nil {
 				return adopted, skipped, err
@@ -305,10 +322,17 @@ func adoptMatches(a *config.Account, mapping config.Mailbox, protocol string, lo
 		used[m.ID] = true
 		adopted++
 	}
+
+	r.Set(a.Name, mapping.Remote, fmt.Sprintf("adoption matching: exact=%d message-id=%d header=%d unmatched=%d ambiguous=%d no-message-id=%d", exactMatches, messageIDMatches, headerMatches, unmatched, ambiguous, noMessageID))
 	return adopted, skipped, nil
 }
 
 func matchRemote(localRaw []byte, remotes []remoteAdoptMessage, used map[string]bool) []remoteAdoptMessage {
+	matches, _ := matchRemoteDetailed(localRaw, remotes, used)
+	return matches
+}
+
+func matchRemoteDetailed(localRaw []byte, remotes []remoteAdoptMessage, used map[string]bool) ([]remoteAdoptMessage, string) {
 	localHash := sha256.Sum256(normalizeRaw(localRaw))
 	var exact []remoteAdoptMessage
 	for _, r := range remotes {
@@ -320,21 +344,38 @@ func matchRemote(localRaw []byte, remotes []remoteAdoptMessage, used map[string]
 		}
 	}
 	if len(exact) > 0 {
-		return exact
+		return exact, "exact"
 	}
 
 	mid := messageID(localRaw)
-	if mid == "" {
-		return nil
+	if mid != "" {
+		var byID []remoteAdoptMessage
+		for _, r := range remotes {
+			if used[r.ID] || !strings.EqualFold(messageID(r.Raw), mid) {
+				continue
+			}
+			byID = append(byID, r)
+		}
+		if len(byID) > 0 {
+			return byID, "message-id"
+		}
 	}
-	var byID []remoteAdoptMessage
+
+	fingerprint := headerFingerprint(localRaw)
+	if fingerprint == "" {
+		return nil, ""
+	}
+	var byHeader []remoteAdoptMessage
 	for _, r := range remotes {
-		if used[r.ID] || !strings.EqualFold(messageID(r.Raw), mid) {
+		if used[r.ID] || headerFingerprint(r.Raw) != fingerprint {
 			continue
 		}
-		byID = append(byID, r)
+		byHeader = append(byHeader, r)
 	}
-	return byID
+	if len(byHeader) > 0 {
+		return byHeader, "header"
+	}
+	return nil, ""
 }
 
 func untaggedLocalMessages(maildirPath string) ([]localAdoptMessage, error) {
@@ -372,6 +413,67 @@ func messageID(raw []byte) string {
 		return ""
 	}
 	return strings.TrimSpace(m.Header.Get("Message-ID"))
+}
+
+// headerFingerprint is a conservative fallback for older Maildir copies whose
+// raw bytes differ from the server copy and whose Message-ID cannot be matched.
+// A match is accepted only when the resulting fingerprint is unique.
+func headerFingerprint(raw []byte) string {
+	m, err := mail.ReadMessage(bytes.NewReader(raw))
+	if err != nil {
+		return ""
+	}
+
+	date := normalizeDate(m.Header.Get("Date"))
+	from := normalizeAddresses(m.Header.Get("From"))
+	to := normalizeAddresses(m.Header.Get("To"))
+	cc := normalizeAddresses(m.Header.Get("Cc"))
+	subject := normalizeSubject(m.Header.Get("Subject"))
+
+	// Require the strongest three envelope fields before using this fallback.
+	// This deliberately refuses vague matches such as subject-only newsletters.
+	if date == "" || from == "" || subject == "" {
+		return ""
+	}
+	return strings.Join([]string{date, from, to, cc, subject}, "\n")
+}
+
+func normalizeDate(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if t, err := mail.ParseDate(value); err == nil {
+		return t.UTC().Format(time.RFC3339)
+	}
+	return strings.ToLower(strings.Join(strings.Fields(value), " "))
+}
+
+func normalizeAddresses(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	addresses, err := mail.ParseAddressList(value)
+	if err != nil {
+		return strings.ToLower(strings.Join(strings.Fields(value), " "))
+	}
+	parts := make([]string, 0, len(addresses))
+	for _, address := range addresses {
+		parts = append(parts, strings.ToLower(strings.TrimSpace(address.Address)))
+	}
+	return strings.Join(parts, ",")
+}
+
+func normalizeSubject(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if decoded, err := new(mime.WordDecoder).DecodeHeader(value); err == nil {
+		value = decoded
+	}
+	return strings.ToLower(strings.Join(strings.Fields(value), " "))
 }
 
 func dryRunPrefix(dry bool) string {
