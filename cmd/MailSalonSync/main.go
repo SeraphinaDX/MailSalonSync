@@ -17,7 +17,7 @@ import (
 	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/syncer"
 )
 
-const version = "0.5.4"
+const version = "0.5.5"
 
 func main() {
 	if err := run(); err != nil {
@@ -157,8 +157,12 @@ func runUploadExisting(path string, args []string, plain bool) error {
 	fs := flag.NewFlagSet("upload-existing", flag.ContinueOnError)
 	accounts := fs.String("account", "", "account name or comma-separated account names; default is all JMAP accounts")
 	dryRun := fs.Bool("dry-run", false, "report local-only messages without importing or renaming them")
+	limit := fs.Int("limit", 0, "maximum messages to upload in this invocation; 0 means unlimited (ignored by dry-run)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *limit < 0 {
+		return fmt.Errorf("upload-existing -limit must be 0 or greater")
 	}
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -169,7 +173,7 @@ func runUploadExisting(path string, args []string, plain bool) error {
 	names := parseAccountNames(*accounts)
 	var summary syncer.UploadExistingSummary
 	task := func(r status.Reporter) error {
-		s, err := syncer.UploadExisting(ctx, cfg, names, syncer.UploadExistingOptions{DryRun: *dryRun}, r)
+		s, err := syncer.UploadExisting(ctx, cfg, names, syncer.UploadExistingOptions{DryRun: *dryRun, Limit: *limit}, r)
 		summary = s
 		return err
 	}
@@ -183,6 +187,11 @@ func runUploadExisting(path string, args []string, plain bool) error {
 			printUploadSummary("upload-existing paused safely:", summary)
 		}
 		return err
+	}
+	if summary.BatchLimitReached {
+		printUploadSummary("upload-existing batch complete:", summary)
+		fmt.Printf("batch limit %d reached; progress saved; rerun the same command to continue\n", *limit)
+		return nil
 	}
 	if *dryRun {
 		fmt.Printf("dry run: would upload %d message(s); would adopt %d existing remote match(es); elsewhere=%d; ambiguous=%d; duplicate-local-to-backup=%d (exact=%d message-id=%d header=%d)\n", summary.Uploaded, summary.Adopted, summary.Elsewhere, summary.Ambiguous, summary.Duplicates, summary.DuplicateExact, summary.DuplicateMessageID, summary.DuplicateHeader)
@@ -263,7 +272,7 @@ func usage(fs *flag.FlagSet) {
 	fmt.Fprintln(out, "Usage:")
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] sync [-account NAME[,NAME...]]")
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] adopt-existing [-account NAME[,NAME...]] [-dry-run]")
-	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] upload-existing [-account NAME[,NAME...]] [-dry-run]")
+	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] upload-existing [-account NAME[,NAME...]] [-dry-run] [-limit N]")
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] jmap-send -account NAME [-file MESSAGE.eml]")
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] check-config")
 	fmt.Fprintln(out, "  MailSalonSync example-config")
