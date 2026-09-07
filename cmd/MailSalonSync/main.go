@@ -16,7 +16,7 @@ import (
 	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/syncer"
 )
 
-const version = "0.4.4"
+const version = "0.4.5"
 
 func main() {
 	if err := run(); err != nil {
@@ -103,7 +103,7 @@ func runSync(path string, args []string, plain bool) error {
 func runAdoptExisting(path string, args []string, plain bool) error {
 	fs := flag.NewFlagSet("adopt-existing", flag.ContinueOnError)
 	accounts := fs.String("account", "", "account name or comma-separated account names; default is all")
-	dryRun := fs.Bool("dry-run", false, "report matches without modifying Maildir files or state")
+	dryRun := fs.Bool("dry-run", false, "report matches without renaming local files or changing state")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
