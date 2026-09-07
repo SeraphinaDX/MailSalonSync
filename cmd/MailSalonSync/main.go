@@ -16,7 +16,7 @@ import (
 	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/syncer"
 )
 
-const version = "0.4.3"
+const version = "0.4.4"
 
 func main() {
 	if err := run(); err != nil {
@@ -103,7 +103,7 @@ func runSync(path string, args []string, plain bool) error {
 func runAdoptExisting(path string, args []string, plain bool) error {
 	fs := flag.NewFlagSet("adopt-existing", flag.ContinueOnError)
 	accounts := fs.String("account", "", "account name or comma-separated account names; default is all")
-	dryRun := fs.Bool("dry-run", false, "report matches without renaming local files or changing state")
+	dryRun := fs.Bool("dry-run", false, "report matches without modifying Maildir files or state")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -129,9 +129,9 @@ func runAdoptExisting(path string, args []string, plain bool) error {
 		return err
 	}
 	if *dryRun {
-		fmt.Printf("dry run: would adopt %d message(s); skipped %d\n", summary.Adopted, summary.Skipped)
+		fmt.Printf("dry run: would adopt %d message(s); would retire %d legacy duplicate(s) to adopt-backup; skipped %d\n", summary.Adopted, summary.Retired, summary.Skipped)
 	} else {
-		fmt.Printf("adopted %d message(s); skipped %d\n", summary.Adopted, summary.Skipped)
+		fmt.Printf("adopted %d message(s); retired %d legacy duplicate(s) to adopt-backup; skipped %d\n", summary.Adopted, summary.Retired, summary.Skipped)
 	}
 	return nil
 }
