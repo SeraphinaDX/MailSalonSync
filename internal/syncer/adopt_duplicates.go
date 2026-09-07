@@ -14,17 +14,23 @@ import (
 )
 
 type trackedLocalAdoptMessage struct {
-	RemoteID string
-	FileKey  string
-	Path     string
-	Raw      []byte
+	FileKey string
+	Path    string
+	Raw     []byte
 }
 
+// trackedLocalAdoptMessages returns known MailSalonSync-tracked files that are
+// physically present in the current mapped Maildir. Older state may contain
+// mailbox labels that no longer exactly match the current config (for example
+// a resolved JMAP name such as "Inbox" versus "role:inbox"). For duplicate
+// reconciliation the physical stable-key file is authoritative, so do not
+// filter on stored RemoteMailbox/LocalMailbox strings here.
 func trackedLocalAdoptMessages(a *config.Account, mapping config.Mailbox, protocol string, s *state.State) ([]trackedLocalAdoptMessage, error) {
 	dir := maildir.Open(localMailboxPath(a, mapping.Local))
+	seen := map[string]bool{}
 	var out []trackedLocalAdoptMessage
 	for _, e := range s.Entries {
-		if e.Protocol != protocol || e.RemoteMailbox != mapping.Remote || e.LocalMailbox != mapping.Local {
+		if e.Protocol != protocol || !strings.HasPrefix(e.FileKey, "mailsalonsync-") || seen[e.FileKey] {
 			continue
 		}
 		path, exists, err := dir.Find(e.FileKey)
@@ -38,11 +44,11 @@ func trackedLocalAdoptMessages(a *config.Account, mapping config.Mailbox, protoc
 		if err != nil {
 			return nil, err
 		}
+		seen[e.FileKey] = true
 		out = append(out, trackedLocalAdoptMessage{
-			RemoteID: e.RemoteID,
-			FileKey:  e.FileKey,
-			Path:     path,
-			Raw:      raw,
+			FileKey: e.FileKey,
+			Path:    path,
+			Raw:     raw,
 		})
 	}
 	return out, nil
@@ -58,16 +64,19 @@ func reconcileLegacyDuplicates(cfg *config.Config, a *config.Account, mapping co
 		return nil, 0, err
 	}
 	if len(tracked) == 0 || len(locals) == 0 {
+		if len(locals) > 0 {
+			r.Set(a.Name, mapping.Remote, fmt.Sprintf("legacy duplicate scan: %d untagged local, %d tracked local candidate(s)", len(locals), len(tracked)))
+		}
 		return locals, 0, nil
 	}
 
 	candidates := make([]remoteAdoptMessage, 0, len(tracked))
 	byID := make(map[string]trackedLocalAdoptMessage, len(tracked))
 	for _, t := range tracked {
-		// RemoteID is unique within one mapped mailbox. It also lets us reuse the
-		// conservative exact / Message-ID / header matcher.
-		candidates = append(candidates, remoteAdoptMessage{ID: t.RemoteID, Raw: t.Raw})
-		byID[t.RemoteID] = t
+		// The stable FileKey is unique within the local account and is all we
+		// need for duplicate reconciliation; no server mutation happens here.
+		candidates = append(candidates, remoteAdoptMessage{ID: t.FileKey, Raw: t.Raw})
+		byID[t.FileKey] = t
 	}
 
 	used := map[string]bool{}
@@ -96,7 +105,7 @@ func reconcileLegacyDuplicates(cfg *config.Config, a *config.Account, mapping co
 				return nil, retired, err
 			}
 		}
-		used[trackedCopy.RemoteID] = true
+		used[trackedCopy.FileKey] = true
 		retired++
 		switch method {
 		case "exact":
@@ -108,13 +117,11 @@ func reconcileLegacyDuplicates(cfg *config.Config, a *config.Account, mapping co
 		}
 	}
 
-	if retired > 0 || ambiguous > 0 {
-		action := "would retire"
-		if !dryRun {
-			action = "retired"
-		}
-		r.Set(a.Name, mapping.Remote, fmt.Sprintf("legacy duplicate reconciliation: %s %d duplicate(s) to adopt-backup (exact=%d message-id=%d header=%d ambiguous=%d); %d untagged remain", action, retired, exact, messageIDMatches, header, ambiguous, len(remaining)))
+	action := "would retire"
+	if !dryRun {
+		action = "retired"
 	}
+	r.Set(a.Name, mapping.Remote, fmt.Sprintf("legacy duplicate reconciliation: %d tracked local candidate(s); %s %d duplicate(s) to adopt-backup (exact=%d message-id=%d header=%d ambiguous=%d); %d untagged remain", len(tracked), action, retired, exact, messageIDMatches, header, ambiguous, len(remaining)))
 	return remaining, retired, nil
 }
 
