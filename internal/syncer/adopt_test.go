@@ -44,6 +44,20 @@ func TestMatchRemoteRejectsAmbiguousMessageID(t *testing.T) {
 	}
 }
 
+func TestMatchRemoteFallsBackToUniqueHeaderFingerprint(t *testing.T) {
+	local := []byte("Message-ID: <local-changed@example>\r\nDate: Tue, 1 Sep 2026 10:30:00 -0400\r\nFrom: Sender <sender@example.com>\r\nTo: User <user@example.com>\r\nSubject: =?UTF-8?Q?Hello_World?=\r\nX-OfflineIMAP: local-copy\r\n\r\nlocal body\r\n")
+	remotes := []remoteAdoptMessage{
+		{ID: "11", Raw: []byte("Message-ID: <server@example>\r\nDate: Tue, 1 Sep 2026 14:30:00 +0000\r\nFrom: sender@example.com\r\nTo: user@example.com\r\nSubject: Hello World\r\n\r\nserver body\r\n")},
+	}
+	got, method := matchRemoteDetailed(local, remotes, map[string]bool{})
+	if len(got) != 1 || got[0].ID != "11" {
+		t.Fatalf("matches = %#v, want ID 11", got)
+	}
+	if method != "header" {
+		t.Fatalf("method = %q, want header", method)
+	}
+}
+
 func TestTrackedEntryNeedsAdoptionForLegacyFileKey(t *testing.T) {
 	a := &config.Account{LocalRoot: t.TempDir()}
 	e := state.Entry{FileKey: "legacy-file-name"}
