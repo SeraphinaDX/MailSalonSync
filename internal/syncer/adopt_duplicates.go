@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/config"
@@ -60,6 +61,57 @@ func trackedLocalAdoptMessages(a *config.Account, mapping config.Mailbox, protoc
 	return out, nil
 }
 
+// trackedStateLocations reports where the stable files for one authoritative
+// state namespace are physically present. This is diagnostic only; it never
+// changes state or Maildir contents.
+func trackedStateLocations(a *config.Account, mapping config.Mailbox, protocol string, s *state.State) (int, map[string]int, int, error) {
+	locations := make(map[string]int)
+	total := 0
+	missing := 0
+
+	for stateKey, e := range s.Entries {
+		if e.RemoteID == "" || !strings.HasPrefix(e.FileKey, "mailsalonsync-") {
+			continue
+		}
+		if stateKey != state.Key(protocol, mapping.Remote, e.RemoteID) {
+			continue
+		}
+		total++
+		found := false
+		for _, candidate := range a.Mailboxes {
+			dir := maildir.Open(localMailboxPath(a, candidate.Local))
+			_, exists, err := dir.Find(e.FileKey)
+			if err != nil {
+				return 0, nil, 0, err
+			}
+			if exists {
+				locations[candidate.Local]++
+				found = true
+			}
+		}
+		if !found {
+			missing++
+		}
+	}
+	return total, locations, missing, nil
+}
+
+func formatTrackedStateLocations(total int, locations map[string]int, missing int) string {
+	keys := make([]string, 0, len(locations))
+	for k := range locations {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys)+1)
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%d", k, locations[k]))
+	}
+	if missing > 0 || len(parts) == 0 {
+		parts = append(parts, fmt.Sprintf("missing=%d", missing))
+	}
+	return fmt.Sprintf("%d tracked state entrie(s); stable-file locations: %s", total, strings.Join(parts, ", "))
+}
+
 // reconcileLegacyDuplicates removes legacy untagged duplicates from the active
 // Maildir when the same message already has a healthy tracked MailSalonSync
 // copy. The legacy copy is moved into state_dir/adopt-backup rather than
@@ -72,6 +124,13 @@ func reconcileLegacyDuplicates(cfg *config.Config, a *config.Account, mapping co
 	if len(tracked) == 0 || len(locals) == 0 {
 		if len(locals) > 0 {
 			r.Set(a.Name, mapping.Remote, fmt.Sprintf("legacy duplicate scan: %d untagged local, %d tracked local candidate(s)", len(locals), len(tracked)))
+			if len(tracked) == 0 {
+				total, locations, missing, err := trackedStateLocations(a, mapping, protocol, s)
+				if err != nil {
+					return nil, 0, err
+				}
+				r.Set(a.Name, mapping.Remote, "tracked-state location diagnostic: "+formatTrackedStateLocations(total, locations, missing))
+			}
 		}
 		return locals, 0, nil
 	}
