@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,8 @@ import (
 	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/state"
 	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/status"
 )
+
+var ErrUploadQuotaExceeded = errors.New("JMAP upload quota exceeded")
 
 type UploadExistingOptions struct {
 	DryRun bool
@@ -80,15 +83,7 @@ func UploadExisting(ctx context.Context, cfg *config.Config, accountNames []stri
 			continue
 		}
 		summary, err := uploadExistingJMAP(ctx, cfg, a, opts, r)
-		total.Uploaded += summary.Uploaded
-		total.Adopted += summary.Adopted
-		total.Elsewhere += summary.Elsewhere
-		total.Ambiguous += summary.Ambiguous
-		total.Duplicates += summary.Duplicates
-		total.DuplicateExact += summary.DuplicateExact
-		total.DuplicateMessageID += summary.DuplicateMessageID
-		total.DuplicateHeader += summary.DuplicateHeader
-		total.Skipped += summary.Skipped
+		addUploadSummary(&total, summary)
 		if err != nil {
 			return total, fmt.Errorf("account %s: %w", a.Name, err)
 		}
@@ -140,8 +135,22 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 		uploaded, adopted := 0, 0
 		elsewhere, ambiguous, duplicates, skipped := 0, 0, 0, 0
 		duplicateExact, duplicateMessageID, duplicateHeader := 0, 0, 0
+
+		flushMailboxSummary := func() {
+			out.Uploaded += uploaded
+			out.Adopted += adopted
+			out.Elsewhere += elsewhere
+			out.Ambiguous += ambiguous
+			out.Duplicates += duplicates
+			out.DuplicateExact += duplicateExact
+			out.DuplicateMessageID += duplicateMessageID
+			out.DuplicateHeader += duplicateHeader
+			out.Skipped += skipped
+		}
+
 		for _, local := range locals {
 			if err := ctx.Err(); err != nil {
+				flushMailboxSummary()
 				return out, err
 			}
 			matches, method := matchRemoteDetailed(local.Raw, index.messages, map[string]bool{})
@@ -154,13 +163,10 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 			if len(matches) == 1 {
 				remoteID := matches[0].ID
 
-				// If this remote identity came from a message selected/imported
-				// earlier in this same migration, this local file is another
-				// legacy copy of that canonical message. Retire it from active
-				// Maildir, even if it is sitting in a different mapped folder.
 				if index.migrated[remoteID] {
 					if !opts.DryRun {
 						if err := backupLegacyDuplicate(cfg.StateDir, a.Name, mapping.Local, local.Path); err != nil {
+							flushMailboxSummary()
 							return out, fmt.Errorf("retire duplicate %s: %w", filepath.Base(local.Path), err)
 						}
 					}
@@ -171,8 +177,6 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 				}
 
 				if !index.locations[remoteID][box.ID] {
-					// It already exists on the server, but in a different mapped
-					// mailbox. Do not create a duplicate in this target mailbox.
 					elsewhere++
 					skipped++
 					continue
@@ -183,12 +187,12 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 					fileKey = existing.FileKey
 					dir := maildir.Open(localMailboxPath(a, mapping.Local))
 					if _, exists, err := dir.Find(fileKey); err != nil {
+						flushMailboxSummary()
 						return out, err
 					} else if exists {
-						// The server message already has a healthy tracked local
-						// copy. Retire this untagged duplicate from active Maildir.
 						if !opts.DryRun {
 							if err := backupLegacyDuplicate(cfg.StateDir, a.Name, mapping.Local, local.Path); err != nil {
+								flushMailboxSummary()
 								return out, fmt.Errorf("retire duplicate %s: %w", filepath.Base(local.Path), err)
 							}
 						}
@@ -200,6 +204,7 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 				}
 				if !opts.DryRun {
 					if _, err := maildir.EnsureStableKey(local.Path, fileKey); err != nil {
+						flushMailboxSummary()
 						return out, err
 					}
 					s.Entries[stateKey] = state.Entry{
@@ -210,6 +215,7 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 						FileKey:       fileKey,
 					}
 					if err := s.Save(statePath); err != nil {
+						flushMailboxSummary()
 						return out, err
 					}
 				}
@@ -230,11 +236,18 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 			seen := localMaildirSeen(local.Path)
 			remoteID, err := c.ImportRaw(ctx, local.Raw, box.ID, seen)
 			if err != nil {
+				if jmap.IsUploadQuotaExceeded(err) {
+					flushMailboxSummary()
+					r.Set(a.Name, box.FullName, fmt.Sprintf("upload quota reached after %d completed upload(s) in this run; progress saved", out.Uploaded))
+					return out, fmt.Errorf("%w: progress saved; raise/reset the server JMAP upload quota and rerun upload-existing", ErrUploadQuotaExceeded)
+				}
+				flushMailboxSummary()
 				return out, fmt.Errorf("import %s: %w", filepath.Base(local.Path), err)
 			}
 			stateKey := state.Key("jmap", mapping.Remote, remoteID)
 			fileKey := maildir.StableKey(a.Name + "\n" + stateKey)
 			if _, err := maildir.EnsureStableKey(local.Path, fileKey); err != nil {
+				flushMailboxSummary()
 				return out, fmt.Errorf("imported remote message %s but failed to tag local file %s: %w", remoteID, filepath.Base(local.Path), err)
 			}
 			s.Entries[stateKey] = state.Entry{
@@ -245,6 +258,7 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 				FileKey:       fileKey,
 			}
 			if err := s.Save(statePath); err != nil {
+				flushMailboxSummary()
 				return out, err
 			}
 			index.messages = append(index.messages, remoteAdoptMessage{ID: remoteID, Raw: local.Raw})
@@ -262,17 +276,21 @@ func uploadExistingJMAP(ctx context.Context, cfg *config.Config, a *config.Accou
 			duplicateAction = "would retire to adopt-backup"
 		}
 		r.Set(a.Name, box.FullName, fmt.Sprintf("upload-existing: %d local untagged; %s %d; %s %d existing remote; elsewhere=%d ambiguous=%d duplicate-local=%d %s (exact=%d message-id=%d header=%d)", len(locals), action, uploaded, adoptAction, adopted, elsewhere, ambiguous, duplicates, duplicateAction, duplicateExact, duplicateMessageID, duplicateHeader))
-		out.Uploaded += uploaded
-		out.Adopted += adopted
-		out.Elsewhere += elsewhere
-		out.Ambiguous += ambiguous
-		out.Duplicates += duplicates
-		out.DuplicateExact += duplicateExact
-		out.DuplicateMessageID += duplicateMessageID
-		out.DuplicateHeader += duplicateHeader
-		out.Skipped += skipped
+		flushMailboxSummary()
 	}
 	return out, nil
+}
+
+func addUploadSummary(dst *UploadExistingSummary, src UploadExistingSummary) {
+	dst.Uploaded += src.Uploaded
+	dst.Adopted += src.Adopted
+	dst.Elsewhere += src.Elsewhere
+	dst.Ambiguous += src.Ambiguous
+	dst.Duplicates += src.Duplicates
+	dst.DuplicateExact += src.DuplicateExact
+	dst.DuplicateMessageID += src.DuplicateMessageID
+	dst.DuplicateHeader += src.DuplicateHeader
+	dst.Skipped += src.Skipped
 }
 
 func countDuplicateMethod(method string, exact, messageID, header *int) {
