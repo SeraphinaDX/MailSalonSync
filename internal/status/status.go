@@ -10,6 +10,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// Event is a single status update emitted by synchronization code. Added and
+// Deleted are deltas used to maintain running counters in the interactive UI.
 type Event struct {
 	Account string
 	Mailbox string
@@ -18,6 +20,8 @@ type Event struct {
 	Deleted int
 }
 
+// Reporter is the narrow interface used by sync code so protocol logic does not
+// depend on Bubble Tea or any particular presentation layer.
 type Reporter interface {
 	Set(account, mailbox, message string)
 	Added(account, mailbox string)
@@ -32,6 +36,8 @@ func (r reporter) Set(a, m, text string) { r.ch <- Event{Account: a, Mailbox: m,
 func (r reporter) Added(a, m string)     { r.ch <- Event{Account: a, Mailbox: m, Added: 1} }
 func (r reporter) Deleted(a, m string)   { r.ch <- Event{Account: a, Mailbox: m, Deleted: 1} }
 
+// plainReporter deliberately ignores counters. Plain mode is intended for logs
+// and parent processes that need clear line-oriented progress and exit status.
 type plainReporter struct{}
 
 func (plainReporter) Set(a, m, text string) {
@@ -132,6 +138,9 @@ func (m model) View() string {
 	return strings.Join(parts, " ") + "\n"
 }
 
+// Run executes task with the interactive UI when stdout is a terminal. The
+// worker runs in a goroutine so Bubble Tea can remain responsive to redraws and
+// cancellation while network/file work is in progress.
 func Run(cancel func(), task func(Reporter) error) error {
 	if !isTerminal(os.Stdout) {
 		return RunPlain(task)
@@ -151,6 +160,8 @@ func Run(cancel func(), task func(Reporter) error) error {
 	if runErr != nil {
 		return runErr
 	}
+	// The UI must never be allowed to make the process look successful before
+	// the actual synchronization task has completed.
 	if !finished.Load() {
 		return fmt.Errorf("status UI exited before sync completed")
 	}
