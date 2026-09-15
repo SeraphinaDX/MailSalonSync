@@ -12,11 +12,14 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// Config is the top-level MailSalonSync configuration.
 type Config struct {
 	StateDir string    `toml:"state_dir"`
 	Accounts []Account `toml:"accounts"`
 }
 
+// Account describes one independently synchronized IMAP or JMAP account.
+// Each account owns its local Maildir root and its own set of mailbox mappings.
 type Account struct {
 	Name             string    `toml:"name"`
 	Protocol         string    `toml:"protocol"`
@@ -27,11 +30,14 @@ type Account struct {
 	JMAP             *JMAP     `toml:"jmap,omitempty"`
 }
 
+// Mailbox maps one remote mailbox selector to a local Maildir path relative to
+// Account.LocalRoot. JMAP selectors may use role:, id:, or a mailbox name/path.
 type Mailbox struct {
 	Remote string `toml:"remote"`
 	Local  string `toml:"local"`
 }
 
+// IMAP contains protocol-specific connection and authentication settings.
 type IMAP struct {
 	Address                    string `toml:"address"`
 	Username                   string `toml:"username"`
@@ -42,6 +48,9 @@ type IMAP struct {
 	AllowExpungeWithoutUIDPlus bool   `toml:"allow_expunge_without_uidplus,omitempty"`
 }
 
+// JMAP contains JMAP session discovery, authentication, identity, and special
+// mailbox settings. Basic auth uses the password fields; bearer auth uses the
+// bearer-token fields.
 type JMAP struct {
 	SessionURL         string `toml:"session_url"`
 	Auth               string `toml:"auth,omitempty"`
@@ -58,6 +67,9 @@ type JMAP struct {
 	SentMailbox        string `toml:"sent_mailbox,omitempty"`
 }
 
+// Load decodes, normalizes, and validates a TOML configuration file.
+// Unknown keys are rejected so spelling mistakes cannot silently disable an
+// option. Paths are expanded only after decoding.
 func Load(path string) (*Config, error) {
 	path = ExpandPath(path)
 	var cfg Config
@@ -85,6 +97,7 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// Validate checks cross-field constraints and applies protocol defaults.
 func (c *Config) Validate() error {
 	if len(c.Accounts) == 0 {
 		return errors.New("config contains no accounts")
@@ -162,6 +175,7 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// Account returns a configured account by its unique name.
 func (c *Config) Account(name string) (*Account, error) {
 	for i := range c.Accounts {
 		if c.Accounts[i].Name == name {
@@ -171,6 +185,7 @@ func (c *Config) Account(name string) (*Account, error) {
 	return nil, fmt.Errorf("no account named %q", name)
 }
 
+// IMAPPassword resolves the configured IMAP secret source.
 func (a *Account) IMAPPassword() (string, error) {
 	if a.IMAP == nil {
 		return "", errors.New("not an IMAP account")
@@ -178,6 +193,8 @@ func (a *Account) IMAPPassword() (string, error) {
 	return resolveSecret(a.IMAP.Password, a.IMAP.PasswordEnv, a.IMAP.PasswordCommand)
 }
 
+// JMAPSecret resolves either the basic-auth password or bearer token selected
+// by the JMAP auth mode.
 func (a *Account) JMAPSecret() (string, error) {
 	if a.JMAP == nil {
 		return "", errors.New("not a JMAP account")
@@ -188,6 +205,9 @@ func (a *Account) JMAPSecret() (string, error) {
 	return resolveSecret(a.JMAP.Password, a.JMAP.PasswordEnv, a.JMAP.PasswordCommand)
 }
 
+// resolveSecret uses the first configured source in literal -> environment ->
+// command order. Command output has only trailing newlines removed so secrets
+// containing other whitespace remain unchanged.
 func resolveSecret(value, env, command string) (string, error) {
 	if value != "" {
 		return value, nil
@@ -208,6 +228,9 @@ func resolveSecret(value, env, command string) (string, error) {
 	return "", errors.New("no secret configured")
 }
 
+// ExpandPath expands environment variables and a leading ~ using the current
+// user's home directory. It intentionally does not implement general shell
+// expansion or globbing.
 func ExpandPath(path string) string {
 	path = os.ExpandEnv(path)
 	if path == "~" {
