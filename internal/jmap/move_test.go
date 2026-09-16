@@ -3,6 +3,7 @@ package jmap
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -61,5 +62,23 @@ func TestMoveBetweenMailboxes(t *testing.T) {
 	}
 	if !sawMove {
 		t.Fatal("Email/set move was not sent")
+	}
+}
+
+func TestMoveBetweenMailboxesReportsVanishedEmail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"methodResponses":[["Email/get",{"accountId":"acc","state":"s","list":[]},"0"]]}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{
+		http:      srv.Client(),
+		session:   Session{APIURL: srv.URL},
+		accountID: "acc",
+	}
+	err := c.MoveBetweenMailboxes(context.Background(), "gone", "junk", "trash")
+	if !errors.Is(err, ErrEmailNotFound) {
+		t.Fatalf("error = %v, want ErrEmailNotFound", err)
 	}
 }
