@@ -63,3 +63,25 @@ func TestMoveBetweenMailboxes(t *testing.T) {
 		t.Fatal("Email/set move was not sent")
 	}
 }
+
+func TestMoveBetweenMailboxesIgnoresVanishedEmail(t *testing.T) {
+	var requests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"methodResponses":[["Email/get",{"accountId":"acc","state":"s","list":[]},"0"]]}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{
+		http:      srv.Client(),
+		session:   Session{APIURL: srv.URL},
+		accountID: "acc",
+	}
+	if err := c.MoveBetweenMailboxes(context.Background(), "gone", "junk", "trash"); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want only the Email/get lookup", requests)
+	}
+}
