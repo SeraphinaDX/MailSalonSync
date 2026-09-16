@@ -3,17 +3,15 @@ package jmap
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 )
 
-// ErrEmailNotFound reports that a tracked JMAP Email disappeared before an
-// operation could be completed. Callers can treat this as stale local state
-// rather than as a transport or protocol failure.
-var ErrEmailNotFound = errors.New("JMAP email no longer exists")
-
 // MoveBetweenMailboxes moves a tracked JMAP Email from one mailbox to another
 // without destroying the Email or disturbing any other mailbox memberships.
+//
+// If the Email disappeared remotely before the move could be applied, the move
+// is treated as already settled. The syncer's normal mailbox reconciliation
+// will remove the stale local file/state rather than aborting the whole account.
 func (c *Client) MoveBetweenMailboxes(ctx context.Context, emailID, fromMailboxID, toMailboxID string) error {
 	if fromMailboxID == toMailboxID {
 		return nil
@@ -25,7 +23,7 @@ func (c *Client) MoveBetweenMailboxes(ctx context.Context, emailID, fromMailboxI
 	}
 	e, ok := emails[emailID]
 	if !ok {
-		return fmt.Errorf("%w: %q", ErrEmailNotFound, emailID)
+		return nil
 	}
 	if !e.MailboxIDs[fromMailboxID] {
 		if e.MailboxIDs[toMailboxID] {
