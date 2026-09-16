@@ -3,7 +3,6 @@ package jmap
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -65,8 +64,10 @@ func TestMoveBetweenMailboxes(t *testing.T) {
 	}
 }
 
-func TestMoveBetweenMailboxesReportsVanishedEmail(t *testing.T) {
+func TestMoveBetweenMailboxesIgnoresVanishedEmail(t *testing.T) {
+	var requests int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"methodResponses":[["Email/get",{"accountId":"acc","state":"s","list":[]},"0"]]}`))
 	}))
@@ -77,8 +78,10 @@ func TestMoveBetweenMailboxesReportsVanishedEmail(t *testing.T) {
 		session:   Session{APIURL: srv.URL},
 		accountID: "acc",
 	}
-	err := c.MoveBetweenMailboxes(context.Background(), "gone", "junk", "trash")
-	if !errors.Is(err, ErrEmailNotFound) {
-		t.Fatalf("error = %v, want ErrEmailNotFound", err)
+	if err := c.MoveBetweenMailboxes(context.Background(), "gone", "junk", "trash"); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want only the Email/get lookup", requests)
 	}
 }
