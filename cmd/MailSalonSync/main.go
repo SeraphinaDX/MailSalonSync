@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,11 +14,12 @@ import (
 	"syscall"
 
 	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/config"
+	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/pim"
 	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/status"
 	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/syncer"
 )
 
-const version = "0.5.5"
+const version = "0.6.0"
 
 func main() {
 	if err := run(); err != nil {
@@ -50,6 +52,8 @@ func run() error {
 		return nil
 	case "sync":
 		return runSync(*configPath, args[1:], *plain)
+	case "discover":
+		return runDiscover(*configPath, args[1:])
 	case "adopt-existing":
 		return runAdoptExisting(*configPath, args[1:], *plain)
 	case "upload-existing":
@@ -71,6 +75,40 @@ func run() error {
 	}
 }
 
+func runDiscover(path string, args []string) error {
+	fs := flag.NewFlagSet("discover", flag.ContinueOnError)
+	name := fs.String("collection", "", "configured collection name (required)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	for _, c := range cfg.Collections {
+		if c.Name != *name {
+			continue
+		}
+		b, err := pim.Open(ctx, c)
+		if err != nil {
+			return err
+		}
+		d := b.(interface {
+			Discover(context.Context) ([]pim.Discovered, error)
+		})
+		rows, err := d.Discover(ctx)
+		if err != nil {
+			return err
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(rows)
+	}
+	return fmt.Errorf("discover requires -collection with a configured collection name")
+}
+
 func parseAccountNames(raw string) []string {
 	var names []string
 	for _, n := range strings.Split(raw, ",") {
@@ -84,6 +122,7 @@ func parseAccountNames(raw string) []string {
 func runSync(path string, args []string, plain bool) error {
 	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
 	accounts := fs.String("account", "", "account name or comma-separated account names; default is all")
+	collections := fs.String("collection", "", "collection name or comma-separated names; default is all mail accounts and collections")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -93,7 +132,7 @@ func runSync(path string, args []string, plain bool) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	names := parseAccountNames(*accounts)
+	names := append(parseAccountNames(*accounts), parseAccountNames(*collections)...)
 	task := func(r status.Reporter) error {
 		return syncer.Sync(ctx, cfg, names, r)
 	}
@@ -271,6 +310,8 @@ func usage(fs *flag.FlagSet) {
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "Usage:")
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] sync [-account NAME[,NAME...]]")
+	fmt.Fprintln(out, "    Add -collection NAME[,NAME...] to select contacts/calendar collections; no selectors syncs everything.")
+	fmt.Fprintln(out, "  MailSalonSync [-config PATH] discover -collection NAME")
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] adopt-existing [-account NAME[,NAME...]] [-dry-run]")
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] upload-existing [-account NAME[,NAME...]] [-dry-run] [-limit N]")
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] jmap-send -account NAME [-file MESSAGE.eml]")
@@ -332,4 +373,14 @@ username = "me@example.net"
 password_command = "pass show mail/example.net"
 drafts_mailbox = "role:drafts"
 sent_mailbox = "role:sent"
+# Optional PIM collections: see docs/contacts-calendar.md for discovery/config.
+# [[collections]]
+# name = "personal-contacts"
+# protocol = "carddav"
+# local_dir = "~/PIM/contacts/personal"
+# remote = "https://dav.example.com/addressbooks/me/personal/"
+# propagate_deletes = false
+# [collections.dav]
+# username = "me@example.com"
+# password_env = "DAV_PASSWORD"
 `

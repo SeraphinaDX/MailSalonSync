@@ -29,6 +29,9 @@ type Auth struct {
 }
 
 type Session struct {
+	Accounts map[string]struct {
+		AccountCapabilities map[string]json.RawMessage `json:"accountCapabilities"`
+	} `json:"accounts"`
 	Capabilities    map[string]json.RawMessage `json:"capabilities"`
 	PrimaryAccounts map[string]string          `json:"primaryAccounts"`
 	APIURL          string                     `json:"apiUrl"`
@@ -66,6 +69,12 @@ type Identity struct {
 }
 
 func New(ctx context.Context, sessionURL string, auth Auth, accountID string) (*Client, error) {
+	return NewForCapability(ctx, sessionURL, auth, accountID, capMail)
+}
+
+// NewForCapability discovers a contacts or calendar account independently of
+// mail: these capabilities may use different primary accounts in one session.
+func NewForCapability(ctx context.Context, sessionURL string, auth Auth, accountID, capability string) (*Client, error) {
 	if err := requireHTTPSURL(sessionURL, "JMAP session URL"); err != nil {
 		return nil, err
 	}
@@ -96,26 +105,40 @@ func New(ctx context.Context, sessionURL string, auth Auth, accountID string) (*
 	if err := json.NewDecoder(resp.Body).Decode(&c.session); err != nil {
 		return nil, fmt.Errorf("decode JMAP session: %w", err)
 	}
-	for label, endpoint := range map[string]string{
-		"JMAP API URL":      c.session.APIURL,
-		"JMAP download URL": c.session.DownloadURL,
-		"JMAP upload URL":   c.session.UploadURL,
-	} {
+	endpoints := map[string]string{"JMAP API URL": c.session.APIURL}
+	if capability == capMail {
+		endpoints = map[string]string{
+			"JMAP API URL":      c.session.APIURL,
+			"JMAP download URL": c.session.DownloadURL,
+			"JMAP upload URL":   c.session.UploadURL,
+		}
+	}
+	for label, endpoint := range endpoints {
 		if err := requireHTTPSURL(endpoint, label); err != nil {
 			return nil, err
 		}
 	}
-	if _, ok := c.session.Capabilities[capMail]; !ok {
-		return nil, errors.New("server does not advertise JMAP Mail")
+	if _, ok := c.session.Capabilities[capability]; !ok {
+		return nil, fmt.Errorf("server does not advertise %s", capability)
 	}
 	if accountID == "" {
-		accountID = c.session.PrimaryAccounts[capMail]
+		accountID = c.session.PrimaryAccounts[capability]
 	}
 	if accountID == "" {
-		return nil, errors.New("JMAP session has no primary mail account; set account_id")
+		return nil, fmt.Errorf("JMAP session has no primary account for %s; set account_id", capability)
+	}
+	if capability != capMail {
+		if _, ok := c.session.Accounts[accountID].AccountCapabilities[capability]; !ok {
+			return nil, fmt.Errorf("JMAP account %q does not advertise %s", accountID, capability)
+		}
 	}
 	c.accountID = accountID
 	return c, nil
+}
+
+// CallPIM uses the same authenticated transport and response validation as mail.
+func (c *Client) CallPIM(ctx context.Context, capability, method string, args any) (json.RawMessage, error) {
+	return c.call(ctx, []string{capCore, capability}, method, args)
 }
 
 func requireHTTPSURL(raw, label string) error {
@@ -127,6 +150,8 @@ func requireHTTPSURL(raw, label string) error {
 }
 
 func (c *Client) AccountID() string { return c.accountID }
+
+func (c *Client) PIMIdentity() string { return c.session.APIURL + "\n" + c.accountID }
 
 func (c *Client) authorize(req *http.Request) {
 	if c.auth.Mode == "bearer" {

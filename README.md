@@ -4,6 +4,12 @@
 
 `MailSalonSync` is a small, Maildir-first replacement for the common OfflineIMAP workflow, written in Go. It can mirror configured folders from either IMAP or JMAP accounts, propagate deletions in both directions, handle multiple accounts and mailbox-to-directory mappings, and submit raw RFC 5322 messages with JMAP.
 
+Version **0.6.0** adds a vdirsyncer-style contacts/calendar workflow: independent
+CardDAV, CalDAV, JMAP Contacts, and JMAP Calendars collections, discovery, and
+two-way synchronization of individual local files. Start with the
+[contacts and calendars guide](docs/contacts-calendar.md), including matching
+MailSalon configuration and migration notes.
+
 While it works, an interactive terminal gets a Charm Bubble Tea/Bubbles spinner with the current account, mailbox, operation, and running add/delete counts. For scripting, Emacs, mu4e, cron-style use, and other non-interactive callers, `-plain` disables the interactive UI and runs synchronously.
 
 ## LLM Code Policy
@@ -16,6 +22,9 @@ This code is daily driven by the author. All bugs are eliminated in a prompt man
 ## Features
 
 - TOML configuration.
+- CardDAV/CalDAV discovery and two-way `.vcf`/`.ics` collection sync.
+- RFC 9610 JMAP Contacts and JMAP Calendars collection sync using full native JSON objects.
+- Collection conflicts preserve local data and save the remote copy; conditional writes reject concurrent edits.
 - Multiple accounts in one config file.
 - IMAP and JMAP accounts can be mixed.
 - Any number of remote mailbox -> local Maildir mappings per account.

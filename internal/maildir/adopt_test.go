@@ -9,7 +9,7 @@ import (
 
 func TestEnsureStableKeyPreservesFlags(t *testing.T) {
 	root := t.TempDir()
-	if err := Ensure(root); err != nil {
+	if err := Open(root).Ensure(); err != nil {
 		t.Fatal(err)
 	}
 	old := filepath.Join(root, "cur", "old-message:2,RS")

@@ -13,6 +13,7 @@ import (
 	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/imapclient"
 	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/jmap"
 	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/maildir"
+	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/pim"
 	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/state"
 	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/status"
 )
@@ -27,7 +28,15 @@ func Sync(ctx context.Context, cfg *config.Config, accountNames []string, r stat
 	if len(selected) > 0 {
 		for n := range selected {
 			if _, err := cfg.Account(n); err != nil {
-				return err
+				found := false
+				for _, c := range cfg.Collections {
+					if c.Name == n {
+						found = true
+					}
+				}
+				if !found {
+					return err
+				}
 			}
 		}
 	}
@@ -50,6 +59,23 @@ func Sync(ctx context.Context, cfg *config.Config, accountNames []string, r stat
 		if err != nil {
 			return fmt.Errorf("account %s: %w", a.Name, err)
 		}
+	}
+	for _, c := range cfg.Collections {
+		if len(selected) > 0 && !selected[c.Name] {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		r.Set(c.Name, c.Remote, "syncing contacts/calendar")
+		b, err := pim.Open(ctx, c)
+		if err == nil {
+			err = pim.SyncCollection(ctx, c, b)
+		}
+		if err != nil {
+			return fmt.Errorf("collection %s: %w", c.Name, err)
+		}
+		r.Set(c.Name, c.Remote, "synchronized")
 	}
 	return nil
 }
