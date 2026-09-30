@@ -51,3 +51,32 @@ username = "me@example.net"
 password_env = "WORK_JMAP_PASSWORD"
 drafts_mailbox = "role:drafts"
 sent_mailbox = "role:sent"
+
+# Optional address book/calendar mappings. See docs/contacts-calendar.md.
+# Discover from a DAV endpoint first, then use a returned collection URL.
+# [[collections]]
+# name = "personal-contacts"
+# protocol = "carddav"
+# local_dir = "~/PIM/contacts/personal"
+# remote = "https://dav.example.com/addressbooks/me/personal/"
+# propagate_deletes = false
+# [collections.dav]
+# username = "me@example.com"
+# password_env = "DAV_PASSWORD"
+#
+# [[collections]]
+# name = "personal-calendar"
+# protocol = "caldav"
+# local_dir = "~/PIM/calendars/personal"
+# remote = "https://dav.example.com/calendars/me/personal/"
+# propagate_deletes = false
+# [collections.dav]
+# username = "me@example.com"
+# password_env = "DAV_PASSWORD"
+#
+# For JMAP use protocol = "jmap-contacts" or "jmap-calendars", a native JSON
+# local_dir, a discovered AddressBook/Calendar ID as remote, and:
+# [collections.jmap]
+# session_url = "https://mail.example.net/.well-known/jmap"
+# username = "me@example.net"
+# password_env = "WORK_JMAP_PASSWORD"

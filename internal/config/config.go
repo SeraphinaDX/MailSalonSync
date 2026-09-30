@@ -14,8 +14,35 @@ import (
 
 // Config is the top-level MailSalonSync configuration.
 type Config struct {
-	StateDir string    `toml:"state_dir"`
-	Accounts []Account `toml:"accounts"`
+	StateDir    string       `toml:"state_dir"`
+	Accounts    []Account    `toml:"accounts"`
+	Collections []Collection `toml:"collections"`
+}
+
+// Collection maps one remote address book or calendar to an independent local
+// directory. DAV uses vCard/iCalendar files; JMAP uses lossless JSON objects.
+type Collection struct {
+	Name             string `toml:"name"`
+	Protocol         string `toml:"protocol"`
+	LocalDir         string `toml:"local_dir"`
+	Remote           string `toml:"remote"`
+	PropagateDeletes bool   `toml:"propagate_deletes"`
+	DAV              *DAV   `toml:"dav"`
+	JMAP             *JMAP  `toml:"jmap"`
+}
+
+type DAV struct {
+	Username        string `toml:"username"`
+	Password        string `toml:"password"`
+	PasswordEnv     string `toml:"password_env"`
+	PasswordCommand string `toml:"password_command"`
+}
+
+func (c *Collection) Secret() (string, error) {
+	if c.DAV != nil {
+		return resolveSecret(c.DAV.Password, c.DAV.PasswordEnv, c.DAV.PasswordCommand)
+	}
+	return (&Account{JMAP: c.JMAP}).JMAPSecret()
 }
 
 // Account describes one independently synchronized IMAP or JMAP account.
@@ -91,6 +118,9 @@ func Load(path string) (*Config, error) {
 	for i := range cfg.Accounts {
 		cfg.Accounts[i].LocalRoot = ExpandPath(cfg.Accounts[i].LocalRoot)
 	}
+	for i := range cfg.Collections {
+		cfg.Collections[i].LocalDir = ExpandPath(cfg.Collections[i].LocalDir)
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -99,10 +129,50 @@ func Load(path string) (*Config, error) {
 
 // Validate checks cross-field constraints and applies protocol defaults.
 func (c *Config) Validate() error {
-	if len(c.Accounts) == 0 {
+	if len(c.Accounts) == 0 && len(c.Collections) == 0 {
 		return errors.New("config contains no accounts")
 	}
 	seen := map[string]bool{}
+	paths := map[string]bool{}
+	for i := range c.Collections {
+		v := &c.Collections[i]
+		if v.Name == "" || seen[v.Name] {
+			return fmt.Errorf("collection name missing or duplicated: %q", v.Name)
+		}
+		seen[v.Name] = true
+		if v.LocalDir == "" || v.Remote == "" {
+			return fmt.Errorf("collection %q: local_dir and remote are required", v.Name)
+		}
+		path, err := filepath.Abs(v.LocalDir)
+		if err != nil {
+			return err
+		}
+		if paths[path] {
+			return fmt.Errorf("collection %q: local_dir is already mapped", v.Name)
+		}
+		paths[path] = true
+		switch v.Protocol {
+		case "carddav", "caldav":
+			u, err := url.Parse(v.Remote)
+			if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+				return fmt.Errorf("collection %q: remote must be an absolute https collection URL", v.Name)
+			}
+			if v.DAV == nil || v.DAV.Username == "" || v.JMAP != nil {
+				return fmt.Errorf("collection %q: dav.username is required and jmap settings are not allowed", v.Name)
+			}
+		case "jmap-contacts", "jmap-calendars":
+			if v.DAV != nil {
+				return fmt.Errorf("collection %q: dav settings are not allowed for JMAP", v.Name)
+			}
+			// Reuse mail's JMAP authentication validation without requiring a mail capability.
+			test := Config{Accounts: []Account{{Name: v.Name, Protocol: "jmap", LocalRoot: "unused", Mailboxes: []Mailbox{{Remote: "unused", Local: "unused"}}, JMAP: v.JMAP}}}
+			if err := test.Validate(); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("collection %q: protocol must be carddav, caldav, jmap-contacts, or jmap-calendars", v.Name)
+		}
+	}
 	for i := range c.Accounts {
 		a := &c.Accounts[i]
 		if a.Name == "" {
