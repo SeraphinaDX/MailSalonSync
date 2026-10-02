@@ -48,6 +48,10 @@ func Sync(ctx context.Context, cfg *config.Config, accountNames []string, r stat
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if len(a.Mailboxes) == 0 {
+			r.Set(a.Name, "", "no active mail folders")
+			continue
+		}
 		r.Set(a.Name, "", "connecting")
 		var err error
 		switch a.Protocol {

@@ -19,6 +19,10 @@ func (c *Client) MoveUID(uid uint32, dest string) (uint32, error) {
 	if dest == "" {
 		return 0, errors.New("destination IMAP mailbox is empty")
 	}
+	if err := validMailboxName(dest); err != nil {
+		return 0, err
+	}
+	dest = c.encodeMailbox(dest)
 	if !c.HasCapability("UIDPLUS") {
 		return 0, errors.New("server lacks UIDPLUS; cannot safely track destination UID for a local Maildir move")
 	}

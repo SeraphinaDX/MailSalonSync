@@ -138,7 +138,10 @@ func (c *Client) HasCapability(name string) bool {
 
 func (c *Client) Select(mailbox string) (SelectInfo, error) {
 	var info SelectInfo
-	_, err := c.simple("SELECT "+quote(mailbox), func(line string) error {
+	if err := validMailboxName(mailbox); err != nil {
+		return info, err
+	}
+	_, err := c.simple("SELECT "+quote(c.encodeMailbox(mailbox)), func(line string) error {
 		if m := uidValidityRE.FindStringSubmatch(line); len(m) == 2 {
 			n, _ := strconv.ParseUint(m[1], 10, 32)
 			info.UIDValidity = uint32(n)

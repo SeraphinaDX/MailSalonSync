@@ -48,11 +48,15 @@ type Client struct {
 }
 
 type Mailbox struct {
-	ID       string  `json:"id"`
-	Name     string  `json:"name"`
-	ParentID *string `json:"parentId"`
-	Role     *string `json:"role"`
-	FullName string  `json:"-"`
+	ID           string  `json:"id"`
+	Name         string  `json:"name"`
+	ParentID     *string `json:"parentId"`
+	Role         *string `json:"role"`
+	FullName     string  `json:"-"`
+	IsSubscribed bool    `json:"isSubscribed"`
+	MyRights     struct {
+		MayCreateChild bool `json:"mayCreateChild"`
+	} `json:"myRights"`
 }
 
 type Email struct {
@@ -222,7 +226,7 @@ func (c *Client) ListMailboxes(ctx context.Context) ([]Mailbox, error) {
 	payload, err := c.call(ctx, []string{capCore, capMail}, "Mailbox/get", map[string]any{
 		"accountId":  c.accountID,
 		"ids":        nil,
-		"properties": []string{"id", "name", "parentId", "role"},
+		"properties": []string{"id", "name", "parentId", "role", "isSubscribed", "myRights"},
 	})
 	if err != nil {
 		return nil, err
