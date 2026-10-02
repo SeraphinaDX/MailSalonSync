@@ -19,7 +19,7 @@ import (
 	"git.cerberusgames.ca/Starstreak/MailSalonSync/internal/syncer"
 )
 
-const version = "0.6.0"
+const version = "0.7.0"
 
 func main() {
 	if err := run(); err != nil {
@@ -54,6 +54,8 @@ func run() error {
 		return runSync(*configPath, args[1:], *plain)
 	case "discover":
 		return runDiscover(*configPath, args[1:])
+	case "folders":
+		return runFolders(*configPath, args[1:])
 	case "adopt-existing":
 		return runAdoptExisting(*configPath, args[1:], *plain)
 	case "upload-existing":
@@ -126,10 +128,11 @@ func runSync(path string, args []string, plain bool) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	cfg, err := config.Load(path)
+	cfg, unlock, err := loadMailOperation(path)
 	if err != nil {
 		return err
 	}
+	defer unlock()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	names := append(parseAccountNames(*accounts), parseAccountNames(*collections)...)
@@ -149,10 +152,11 @@ func runAdoptExisting(path string, args []string, plain bool) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	cfg, err := config.Load(path)
+	cfg, unlock, err := loadMailOperation(path)
 	if err != nil {
 		return err
 	}
+	defer unlock()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	names := parseAccountNames(*accounts)
@@ -203,10 +207,11 @@ func runUploadExisting(path string, args []string, plain bool) error {
 	if *limit < 0 {
 		return fmt.Errorf("upload-existing -limit must be 0 or greater")
 	}
-	cfg, err := config.Load(path)
+	cfg, unlock, err := loadMailOperation(path)
 	if err != nil {
 		return err
 	}
+	defer unlock()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	names := parseAccountNames(*accounts)
@@ -312,6 +317,7 @@ func usage(fs *flag.FlagSet) {
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] sync [-account NAME[,NAME...]]")
 	fmt.Fprintln(out, "    Add -collection NAME[,NAME...] to select contacts/calendar collections; no selectors syncs everything.")
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] discover -collection NAME")
+	fmt.Fprintln(out, "  MailSalonSync [-config PATH] folders -account NAME [-action list|create|subscribe|unsubscribe] [-name NAME] [-parent ID] [-mailbox ID] [-local PATH]")
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] adopt-existing [-account NAME[,NAME...]] [-dry-run]")
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] upload-existing [-account NAME[,NAME...]] [-dry-run] [-limit N]")
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] jmap-send -account NAME [-file MESSAGE.eml]")

@@ -124,6 +124,11 @@ func Load(path string) (*Config, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	for i := range cfg.Accounts {
+		if err := cfg.ApplyFolderOverrides(&cfg.Accounts[i]); err != nil {
+			return nil, err
+		}
+	}
 	return &cfg, nil
 }
 
