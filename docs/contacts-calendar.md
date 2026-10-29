@@ -164,8 +164,14 @@ normalization can require explicit conflict reconciliation on retry.
 
 `.mss-state.json`, `.mss-lock`, `.mss-conflicts`, `.mss-backup`, and `.mss-trash`
 are internal files/directories. Keep the state file with its collection. A lock
-prevents overlapping MailSalon/MailSalonSync edits. After a hard kill, remove
-`.mss-lock` only after confirming neither process is using that collection.
+prevents overlapping MailSalon/MailSalonSync edits. MailSalonSync now stores process ownership metadata and automatically
+recovers locks left by killed sync processes after confirming their owner
+is no longer running on the same host. It leaves legacy empty locks,
+unrecognized metadata, and locks from other hosts untouched because an
+older MailSalon editor might still be active. In those cases, stop
+MailSalon/MailSalonSync and confirm neither is using the collection before
+removing `.mss-lock` manually. The persistent `.mss-lock.guard` file
+coordinates recovery across sync processes; never delete it.
 State is bound to the remote configuration and actual resolved JMAP account;
 retarget a collection using a new local directory.
 
