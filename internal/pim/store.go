@@ -154,13 +154,11 @@ func SyncCollection(ctx context.Context, c config.Collection, b Backend) error {
 	if err := os.MkdirAll(c.LocalDir, 0700); err != nil {
 		return err
 	}
-	lock := filepath.Join(c.LocalDir, ".mss-lock")
-	f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	unlock, err := config.LockCollection(c.LocalDir)
 	if err != nil {
-		return fmt.Errorf("collection is locked (%s): %w", lock, err)
+		return err
 	}
-	f.Close()
-	defer os.Remove(lock)
+	defer unlock()
 	ext := Extension(c.Protocol)
 	identity := c.Protocol + "\n" + c.Remote
 	if bound, ok := b.(interface{ Identity() string }); ok {
