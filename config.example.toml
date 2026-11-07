@@ -17,7 +17,7 @@ local = "Archive"
 [accounts.imap]
 address = "imap.example.com:993"
 username = "me@example.com"
-password_env = "PERSONAL_IMAP_PASSWORD"
+# Register with MailSalonSync password; no secret belongs here.
 security = "tls"
 
 [[accounts]]
@@ -48,7 +48,7 @@ local = "Archive"
 session_url = "https://mail.example.net/.well-known/jmap"
 auth = "basic"
 username = "me@example.net"
-password_env = "WORK_JMAP_PASSWORD"
+# Register with MailSalonSync password; no secret belongs here.
 drafts_mailbox = "role:drafts"
 sent_mailbox = "role:sent"
 
@@ -62,7 +62,7 @@ sent_mailbox = "role:sent"
 # propagate_deletes = false
 # [collections.dav]
 # username = "me@example.com"
-# password_env = "DAV_PASSWORD"
+# Register with MailSalonSync password; no secret belongs here.
 #
 # [[collections]]
 # name = "personal-calendar"
@@ -72,11 +72,11 @@ sent_mailbox = "role:sent"
 # propagate_deletes = false
 # [collections.dav]
 # username = "me@example.com"
-# password_env = "DAV_PASSWORD"
+# Register with MailSalonSync password; no secret belongs here.
 #
 # For JMAP use protocol = "jmap-contacts" or "jmap-calendars", a native JSON
 # local_dir, a discovered AddressBook/Calendar ID as remote, and:
 # [collections.jmap]
 # session_url = "https://mail.example.net/.well-known/jmap"
 # username = "me@example.net"
-# password_env = "WORK_JMAP_PASSWORD"
+# Register with MailSalonSync password; no secret belongs here.

@@ -34,7 +34,7 @@ propagate_deletes = false
 
 [collections.dav]
 username = "me@example.com"
-password_env = "DAV_PASSWORD"
+# Register with MailSalonSync password; no secret belongs here.
 
 [[collections]]
 name = "personal-calendar"
@@ -45,10 +45,10 @@ propagate_deletes = false
 
 [collections.dav]
 username = "me@example.com"
-password_env = "DAV_PASSWORD"
+# Register with MailSalonSync password; no secret belongs here.
 ```
 
-DAV authentication supports `password`, `password_env`, and `password_command`
+DAV authentication uses `MailSalonSync password -collection NAME` by default and also supports `password_env` and `password_command`
 in the same precedence order as mail. HTTPS and strong ETags are required.
 Only authenticated-origin URLs are followed. Use a collection URL for syncing,
 not an entire principal or home-set URL.
@@ -82,7 +82,7 @@ propagate_deletes = false
 [collections.jmap]
 session_url = "https://mail.example.com/.well-known/jmap"
 username = "me@example.com"
-password_env = "JMAP_PASSWORD"
+# Register with MailSalonSync password; no secret belongs here.
 
 [[collections]]
 name = "jmap-calendar"
@@ -94,7 +94,7 @@ propagate_deletes = false
 [collections.jmap]
 session_url = "https://mail.example.com/.well-known/jmap"
 username = "me@example.com"
-password_env = "JMAP_PASSWORD"
+# Register with MailSalonSync password; no secret belongs here.
 ```
 
 Run `discover -collection jmap-contacts` or `discover -collection jmap-calendar`

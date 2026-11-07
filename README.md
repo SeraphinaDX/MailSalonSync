@@ -39,7 +39,7 @@ This code is daily driven by the author. All bugs are eliminated in a prompt man
 - IMAP deletion uses UIDPLUS `UID EXPUNGE` when available. A broad `EXPUNGE` is refused by default on servers without UIDPLUS.
 - JMAP deletion removes the message from the mapped mailbox; if that is its final mailbox, the Email is destroyed.
 - JMAP send accepts a complete RFC 5322 message from a file or stdin.
-- Secrets can come from environment variables or commands such as `pass`, so they do not need to live in the config file.
+- Passwords and tokens are stored in the OS keyring using `MailSalonSync password`. Environment and command sources are also supported.
 - IMAP supports implicit TLS, STARTTLS, and explicit plaintext mode.
 - JMAP session/API/upload/download endpoints are required to use HTTPS.
 - Ctrl-C or `q` in the interactive status UI cancels the underlying sync/send operation.
@@ -145,7 +145,7 @@ local = "Junk"
 session_url = "https://mail.example.net/.well-known/jmap"
 auth = "basic"
 username = "me@example.net"
-password_env = "JMAP_PASSWORD"
+# Register with MailSalonSync password; no secret belongs here.
 drafts_mailbox = "role:drafts"
 sent_mailbox = "role:sent"
 ```
@@ -171,7 +171,7 @@ local = "INBOX"
 session_url = "https://mail.example.org/.well-known/jmap"
 auth = "basic"
 username = "second-user"
-password_env = "SECOND_JMAP_PASSWORD"
+# Register with MailSalonSync password; no secret belongs here.
 ```
 
 Running `MailSalonSync sync` synchronizes all configured accounts. Use `sync -account NAME` to target one account.
@@ -226,7 +226,7 @@ local = "Archive"
 [accounts.imap]
 address = "imap.example.com:993"
 username = "me@example.com"
-password_env = "PERSONAL_IMAP_PASSWORD"
+# Register with MailSalonSync password; no secret belongs here.
 security = "tls"
 ```
 
@@ -260,30 +260,34 @@ local = "Sent"
 session_url = "https://mail.example.net/.well-known/jmap"
 auth = "basic"
 username = "me@example.net"
-password_command = "pass show mail/example.net"
+# Register with MailSalonSync password; no secret belongs here.
 drafts_mailbox = "role:drafts"
 sent_mailbox = "role:sent"
 ```
 
-For bearer authentication use `auth = "bearer"` and one of `bearer_token`, `bearer_token_env`, or `bearer_token_command`.
+For bearer authentication use `auth = "bearer"` and register the token with the password command. `bearer_token_env` and `bearer_token_command` are also supported.
 
 `account_id` and `identity_id` are optional. If omitted, the primary JMAP Mail account is used, and sending selects an identity matching the message's `From:` header when possible.
 
 ### Secrets
 
-For normal use, prefer environment variables or commands rather than storing a password directly in the TOML file:
+Remove `password`, `bearer_token`, and any environment/command secret source from the account configuration, then register its password (or JMAP bearer token):
 
-```toml
-password_env = "JMAP_PASSWORD"
+```sh
+MailSalonSync password
 ```
 
-or:
+The command walks through configured logins. Collections on the same DAV server with the same username share one password, so you enter it once. Use `-account NAME` or `-collection NAME` to update a particular login. Input is hidden and confirmed. Repeating the command updates the credential; add `-delete` to remove it. With a custom config, put `-config PATH` before `password`. Plaintext `password` and `bearer_token` fields in TOML are rejected; existing users must remove them before registering credentials. The command never rewrites your configuration.
+
+Credentials use the OS keyring through [go-keyring](https://github.com/zalando/go-keyring): Secret Service over D-Bus on Linux/BSD, Keychain on macOS, and Credential Manager on Windows. Linux requires a running Secret Service provider such as GNOME Keyring with a login collection. Sync retrieves the saved credential without asking for the mail password. The keyring must be accessible and unlocked in the session running MailSalonSync; OS unlock or access prompts may still occur. There is no plaintext fallback when the keyring is unavailable.
+
+Credentials are tied to the protocol, server, username, and authentication mode. DAV collection paths and configured names share the same server login. Updating or deleting one shared credential affects every collection using that login. Register again after changing connection settings (delete the old credential before changing them).
+
+Headless setups can explicitly use `password_env` or `password_command` (or `bearer_token_env` / `bearer_token_command` for bearer auth). These override the keyring. For example:
 
 ```toml
 password_command = "pass show mail/example.net"
 ```
-
-The same secret-source options remain available for IMAP and JMAP as appropriate.
 
 ## Deletion semantics
 

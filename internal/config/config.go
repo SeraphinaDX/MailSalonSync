@@ -40,9 +40,9 @@ type DAV struct {
 
 func (c *Collection) Secret() (string, error) {
 	if c.DAV != nil {
-		return resolveSecret(c.DAV.Password, c.DAV.PasswordEnv, c.DAV.PasswordCommand)
+		return c.Credential().secret(c.DAV.Password, c.DAV.PasswordEnv, c.DAV.PasswordCommand)
 	}
-	return (&Account{JMAP: c.JMAP}).JMAPSecret()
+	return (&Account{Name: c.Name, JMAP: c.JMAP}).JMAPSecret()
 }
 
 // Account describes one independently synchronized IMAP or JMAP account.
@@ -106,6 +106,11 @@ func Load(path string) (*Config, error) {
 	}
 	if undecoded := md.Undecoded(); len(undecoded) != 0 {
 		return nil, fmt.Errorf("parse config: unknown fields: %v", undecoded)
+	}
+	for _, key := range md.Keys() {
+		if last := key[len(key)-1]; last == "password" || last == "bearer_token" {
+			return nil, fmt.Errorf("plaintext secret field %s is no longer supported; remove it and register the secret with MailSalonSync password", key)
+		}
 	}
 	if cfg.StateDir == "" {
 		if x := os.Getenv("XDG_STATE_HOME"); x != "" {
@@ -265,7 +270,7 @@ func (a *Account) IMAPPassword() (string, error) {
 	if a.IMAP == nil {
 		return "", errors.New("not an IMAP account")
 	}
-	return resolveSecret(a.IMAP.Password, a.IMAP.PasswordEnv, a.IMAP.PasswordCommand)
+	return a.Credential().secret(a.IMAP.Password, a.IMAP.PasswordEnv, a.IMAP.PasswordCommand)
 }
 
 // JMAPSecret resolves either the basic-auth password or bearer token selected
@@ -275,9 +280,9 @@ func (a *Account) JMAPSecret() (string, error) {
 		return "", errors.New("not a JMAP account")
 	}
 	if a.JMAP.Auth == "bearer" {
-		return resolveSecret(a.JMAP.BearerToken, a.JMAP.BearerTokenEnv, a.JMAP.BearerTokenCommand)
+		return a.Credential().secret(a.JMAP.BearerToken, a.JMAP.BearerTokenEnv, a.JMAP.BearerTokenCommand)
 	}
-	return resolveSecret(a.JMAP.Password, a.JMAP.PasswordEnv, a.JMAP.PasswordCommand)
+	return a.Credential().secret(a.JMAP.Password, a.JMAP.PasswordEnv, a.JMAP.PasswordCommand)
 }
 
 // resolveSecret uses the first configured source in literal -> environment ->

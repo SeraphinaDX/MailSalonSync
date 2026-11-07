@@ -131,9 +131,10 @@ func TestFolderCommandPersistsMappingUsedBySync(t *testing.T) {
 		}
 	}()
 	t.Cleanup(func() { listener.Close(); <-acceptDone; workers.Wait() })
+	t.Setenv("MAILSALON_TEST_PASSWORD", "fixture-only")
 	root, state := t.TempDir(), t.TempDir()
 	path := filepath.Join(t.TempDir(), "config.toml")
-	text := fmt.Sprintf("# keep main config intact\nstate_dir = %q\n[[accounts]]\nname = 'mail'\nprotocol = 'imap'\nlocal_root = %q\npropagate_deletes = true\n[[accounts.mailboxes]]\nremote = 'INBOX'\nlocal = 'INBOX'\n[accounts.imap]\naddress = %q\nsecurity = 'plain'\nusername = 'fixture'\npassword = 'fixture-only'\n", state, root, listener.Addr().String())
+	text := fmt.Sprintf("# keep main config intact\nstate_dir = %q\n[[accounts]]\nname = 'mail'\nprotocol = 'imap'\nlocal_root = %q\npropagate_deletes = true\n[[accounts.mailboxes]]\nremote = 'INBOX'\nlocal = 'INBOX'\n[accounts.imap]\naddress = %q\nsecurity = 'plain'\nusername = 'fixture'\npassword_env = 'MAILSALON_TEST_PASSWORD'\n", state, root, listener.Addr().String())
 	os.WriteFile(path, []byte(text), 0600)
 	capture := func(fn func() error) []byte {
 		t.Helper()

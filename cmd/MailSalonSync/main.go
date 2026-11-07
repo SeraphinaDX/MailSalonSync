@@ -50,6 +50,8 @@ func run() error {
 	case "example-config":
 		fmt.Print(exampleConfig)
 		return nil
+	case "password":
+		return runPassword(*configPath, args[1:])
 	case "sync":
 		return runSync(*configPath, args[1:], *plain)
 	case "discover":
@@ -321,6 +323,7 @@ func usage(fs *flag.FlagSet) {
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] adopt-existing [-account NAME[,NAME...]] [-dry-run]")
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] upload-existing [-account NAME[,NAME...]] [-dry-run] [-limit N]")
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] [-plain] jmap-send -account NAME [-file MESSAGE.eml]")
+	fmt.Fprintln(out, "  MailSalonSync [-config PATH] password [-account NAME | -collection NAME] [-delete]")
 	fmt.Fprintln(out, "  MailSalonSync [-config PATH] check-config")
 	fmt.Fprintln(out, "  MailSalonSync example-config")
 	fmt.Fprintln(out, "  MailSalonSync version")
@@ -347,7 +350,7 @@ local = "Archive"
 [accounts.imap]
 address = "imap.example.com:993"
 username = "me@example.com"
-password_env = "PERSONAL_IMAP_PASSWORD"
+# Register with MailSalonSync password; no secret belongs here.
 security = "tls"
 
 [[accounts]]
@@ -376,7 +379,7 @@ local = "Projects"
 session_url = "https://mail.example.net/.well-known/jmap"
 auth = "basic"
 username = "me@example.net"
-password_command = "pass show mail/example.net"
+# Register with MailSalonSync password; no secret belongs here.
 drafts_mailbox = "role:drafts"
 sent_mailbox = "role:sent"
 # Optional PIM collections: see docs/contacts-calendar.md for discovery/config.
@@ -388,5 +391,5 @@ sent_mailbox = "role:sent"
 # propagate_deletes = false
 # [collections.dav]
 # username = "me@example.com"
-# password_env = "DAV_PASSWORD"
+# Register with MailSalonSync password; no secret belongs here.
 `
