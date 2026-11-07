@@ -1,7 +1,5 @@
 # MailSalonSync
 
-![Logo](logo.avif)
-
 `MailSalonSync` is a small, Maildir-first replacement for the common OfflineIMAP workflow, written in Go. It can mirror configured folders from either IMAP or JMAP accounts, propagate deletions in both directions, handle multiple accounts and mailbox-to-directory mappings, and submit raw RFC 5322 messages with JMAP.
 
 Version **0.7.0** adds IMAP/JMAP remote folder creation and subscriptions, durable
