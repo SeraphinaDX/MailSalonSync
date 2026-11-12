@@ -320,24 +320,14 @@ func syncJMAP(ctx context.Context, cfg *config.Config, a *config.Account, r stat
 					return err
 				}
 				r.Set(a.Name, box.FullName, fmt.Sprintf("moving locally moved message to %s", destBox.FullName))
-				if err := c.MoveBetweenMailboxes(ctx, e.RemoteID, box.ID, destBox.ID); err != nil {
+				outcome, err := c.MoveBetweenMailboxesOutcome(ctx, e.RemoteID, box.ID, destBox.ID)
+				if err != nil {
 					return err
 				}
-				newKey := state.Key("jmap", move.Remote, e.RemoteID)
-				if existing, ok := s.Entries[newKey]; ok && newKey != key && existing.FileKey != e.FileKey {
-					return fmt.Errorf("destination JMAP state collision for mailbox %q email %s", move.Remote, e.RemoteID)
+				if outcome == jmap.MoveGone || outcome == jmap.MoveMovedElsewhere {
+					r.Set(a.Name, box.FullName, "remote message changed; saving local copy before reconciling")
 				}
-				if newKey != key {
-					delete(s.Entries, key)
-				}
-				s.Entries[newKey] = state.Entry{
-					Protocol:      "jmap",
-					RemoteMailbox: move.Remote,
-					RemoteID:      e.RemoteID,
-					LocalMailbox:  move.Local,
-					FileKey:       e.FileKey,
-				}
-				if err := s.Save(path); err != nil {
+				if err := reconcileJMAPMove(cfg, a, s, path, key, e, *move, outcome); err != nil {
 					return err
 				}
 				continue
