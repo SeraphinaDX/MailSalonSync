@@ -85,3 +85,42 @@ func TestMoveBetweenMailboxesIgnoresVanishedEmail(t *testing.T) {
 		t.Fatalf("requests = %d, want only the Email/get lookup", requests)
 	}
 }
+
+func TestMoveBetweenMailboxesOutcomeRemoteChanges(t *testing.T) {
+	cases := []struct {
+		name string
+		getResponse string
+		setResponse string
+		want MoveOutcome
+		wantSet bool
+	}{
+		{"deleted remotely", `{"methodResponses":[["Email/get",{"accountId":"acc","list":[]},"0"]]}`, "", MoveGone, false},
+		{"already in target", `{"methodResponses":[["Email/get",{"accountId":"acc","list":[{"id":"email1","blobId":"blob","mailboxIds":{"trash":true},"keywords":{}}]},"0"]]}`, "", MoveAlreadyInDestination, false},
+		{"moved to another folder", `{"methodResponses":[["Email/get",{"accountId":"acc","list":[{"id":"email1","blobId":"blob","mailboxIds":{"archive":true},"keywords":{}}]},"0"]]}`, "", MoveMovedElsewhere, false},
+		{"disappeared during update", `{"methodResponses":[["Email/get",{"accountId":"acc","list":[{"id":"email1","blobId":"blob","mailboxIds":{"junk":true},"keywords":{}}]},"0"]]}`, `{"methodResponses":[["Email/set",{"accountId":"acc","notUpdated":{"email1":{"type":"notFound"}}},"0"]]}`, MoveGone, true},
+	}
+	for _,tc:=range cases {
+		t.Run(tc.name,func(t *testing.T) {
+			var setCalls int
+			srv:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request) {
+				var req struct { MethodCalls [][]json.RawMessage `json:"methodCalls"` }
+				if err:=json.NewDecoder(r.Body).Decode(&req);err!=nil {t.Error(err);http.Error(w,"bad request",400);return}
+				var method string
+				if len(req.MethodCalls)!=1 || len(req.MethodCalls[0])<1 {t.Error("missing method call");http.Error(w,"bad request",400);return}
+				if err:=json.Unmarshal(req.MethodCalls[0][0],&method);err!=nil {t.Error(err);http.Error(w,"bad request",400);return}
+				w.Header().Set("Content-Type","application/json")
+				switch method {
+				case "Email/get": _,_=w.Write([]byte(tc.getResponse))
+				case "Email/set": setCalls++;_,_=w.Write([]byte(tc.setResponse))
+				default: t.Errorf("unexpected JMAP call %q",method);http.Error(w,"unexpected method",400)
+				}
+			}))
+			defer srv.Close()
+			c:=&Client{http:srv.Client(),session:Session{APIURL:srv.URL},accountID:"acc"}
+			outcome,err:=c.MoveBetweenMailboxesOutcome(context.Background(),"email1","junk","trash")
+			if err!=nil {t.Fatal(err)}
+			if outcome!=tc.want {t.Fatalf("outcome = %v, want %v",outcome,tc.want)}
+			if (setCalls>0)!=tc.wantSet {t.Fatalf("Email/set calls = %d, expected set %v",setCalls,tc.wantSet)}
+		})
+	}
+}
