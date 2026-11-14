@@ -2,6 +2,7 @@ package folders
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -135,6 +136,58 @@ func TestFailedRemoteChangeDoesNotSaveMapping(t *testing.T) {
 		t.Fatal("saved unconfirmed mapping")
 	}
 }
+
+func TestCreateMissingMappedMailboxPreservesMailAndMapping(t *testing.T) {
+	for _, disabled := range []bool{false, true} {
+		t.Run(fmt.Sprint("disabled=", disabled), func(t *testing.T) {
+			cfg, a, b, writes := fakeFolders(t)
+			original := config.Mailbox{Remote: "Archive", Local: "Archive"}
+			if disabled {
+				if err := cfg.SaveFolderOverride(a, config.FolderOverride{Remote: original.Remote, Local: original.Local}); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				a.Mailboxes = append(a.Mailboxes, original)
+			}
+			path := filepath.Join(a.LocalRoot, "Archive", "cur")
+			if err := os.MkdirAll(path, 0700); err != nil {
+				t.Fatal(err)
+			}
+			message := filepath.Join(path, "tracked:2,S")
+			if err := os.WriteFile(message, []byte("cached mail"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			// Model JMAP: the created ID differs from the configured name.
+			create := b.create
+			b.create = func(name string, parent *Folder) (Folder, error) {
+				f, err := create(name, parent)
+				f.ID = "id:new-archive"
+				return f, err
+			}
+			if _, err := runBackend(cfg, a, Request{Action: "create", Name: "Archive", Local: "Other"}, b); err == nil || *writes != 0 {
+				t.Fatal("allowed mapping change or mutated server")
+			}
+			result, err := runBackend(cfg, a, Request{Action: "create", Name: "Archive", Local: "Archive"}, b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if *writes != 1 || len(a.Mailboxes) != 2 || a.Mailboxes[1] != original {
+				t.Fatalf("writes=%d mappings=%#v", *writes, a.Mailboxes)
+			}
+			if !result.Folders[0].Syncing || result.Folders[0].Local != "Archive" {
+				t.Fatal(result)
+			}
+			if data, err := os.ReadFile(message); err != nil || string(data) != "cached mail" {
+				t.Fatalf("cached mail changed: %q, %v", data, err)
+			}
+			fresh := *a
+			fresh.Mailboxes = []config.Mailbox{{Remote: "INBOX", Local: "."}, original}
+			if err := cfg.ApplyFolderOverrides(&fresh); err != nil || len(fresh.Mailboxes) != 2 {
+				t.Fatalf("reload mappings: %#v, %v", fresh.Mailboxes, err)
+			}
+		})
+	}
+}
 func TestPartialLocalFailureCanBeRetried(t *testing.T) {
 	cfg, a, b, _ := fakeFolders(t)
 	create := b.create
@@ -156,9 +209,11 @@ func TestPartialLocalFailureCanBeRetried(t *testing.T) {
 	}
 }
 
-func TestAutomaticLocalNamesRemainPortable(t *testing.T){
-	for _,name:=range []string{"Travel/Café", "Trips/CON", "Notes/COM1.txt", "Old/new", "Trailing ", "A:B/../100%", "cur"}{
-		local:="Folders/"+safeLocal(name)
-		if err:=config.ValidateFolderLocal(local);err!=nil{t.Fatal(name,local,err)}
+func TestAutomaticLocalNamesRemainPortable(t *testing.T) {
+	for _, name := range []string{"Travel/Café", "Trips/CON", "Notes/COM1.txt", "Old/new", "Trailing ", "A:B/../100%", "cur"} {
+		local := "Folders/" + safeLocal(name)
+		if err := config.ValidateFolderLocal(local); err != nil {
+			t.Fatal(name, local, err)
+		}
 	}
 }

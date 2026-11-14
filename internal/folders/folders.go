@@ -292,6 +292,28 @@ func runBackend(cfg *config.Config, a *config.Account, req Request, b *backend) 
 	m, existing := mapping(target)
 	if req.Action == "create" {
 		existing = false
+		// A configured name may refer to a mailbox that has not been created
+		// yet. Reuse that mapping, including its cached mail and state keys.
+		candidates := append([]config.Mailbox{}, a.Mailboxes...)
+		for _, r := range records {
+			candidates = append(candidates, config.Mailbox{Remote: r.Remote, Local: r.Local})
+		}
+		for _, candidate := range candidates {
+			if candidate.Remote != target.Name {
+				continue
+			}
+			resolved := false
+			for _, row := range rows {
+				if b.matches(candidate.Remote, row) {
+					resolved = true
+					break
+				}
+			}
+			if !resolved {
+				m, existing = candidate, true
+				break
+			}
+		}
 	}
 	if !existing {
 		m = config.Mailbox{Remote: target.ID, Local: req.Local}
@@ -341,7 +363,9 @@ func runBackend(cfg *config.Config, a *config.Account, req Request, b *backend) 
 	os.Remove(probe.Name())
 	if req.Action == "create" {
 		target, err = b.create(req.Name, parent)
-		m.Remote = target.ID
+		if !existing {
+			m.Remote = target.ID
+		}
 	} else {
 		err = b.subscribe(target, req.Action == "subscribe")
 	}
